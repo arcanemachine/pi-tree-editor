@@ -8,9 +8,10 @@ Safely edit Pi conversation history through the native `/tree` selector.
 
 > Conversation surgery preserves the original session branch and changes conversation context only. It does not restore files, Git state, tool side effects, or other external state.
 
-## Requirements
+## Compatibility
 
-- Pi 0.84.1 or later
+- Tested against Pi 0.84.1
+- Future Pi versions are accepted when the required native capabilities match; incompatible hooks fail closed and leave native `/tree` available
 - Node.js 22.19.0 or later for package development
 
 ## Installation
