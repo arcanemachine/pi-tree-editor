@@ -1,0 +1,513 @@
+import { buildSessionContext } from "@earendil-works/pi-coding-agent";
+import { activePath, indexEntries, pathEntryMap } from "./active-path.js";
+import {
+  assertEditable,
+  buildLogicalUnits,
+  editableTextBlocks,
+} from "./logical-units.js";
+import {
+  SurgeryError,
+  clone,
+  isObject,
+  type LogicalUnit,
+  type ReplayItem,
+  type SessionEntryLike,
+  type SurgeryOperation,
+  type SurgeryPlan,
+} from "./types.js";
+
+export type PlanInput = {
+  entries: SessionEntryLike[];
+  leafId: string | null;
+  operations: SurgeryOperation[];
+  sessionId?: string;
+};
+
+export function planSurgery(input: PlanInput): SurgeryPlan {
+  const sourceEntries = clone(input.entries);
+  const sourcePath = activePath(sourceEntries, input.leafId);
+  if (!input.leafId || sourcePath.length === 0) {
+    throw new SurgeryError(
+      "EMPTY_SESSION",
+      "There is no active conversation path to edit",
+    );
+  }
+  if (input.operations.length === 0) {
+    throw new SurgeryError(
+      "NO_OPERATIONS",
+      "No conversation edits were staged",
+    );
+  }
+
+  const { units, issues } = buildLogicalUnits(sourcePath);
+  if (issues.length > 0) {
+    throw new SurgeryError(
+      "MALFORMED_TOOL_EXCHANGE",
+      issues.join("; "),
+      issues,
+    );
+  }
+  const unitById = new Map<string, LogicalUnit>();
+  const entryToUnit = new Map<string, LogicalUnit>();
+  for (const unit of units) {
+    unitById.set(unit.id, unit);
+    for (const entryId of unit.entryIds) entryToUnit.set(entryId, unit);
+  }
+  const pathIndices = pathEntryMap(sourcePath);
+  const sourceById = indexEntries(sourceEntries);
+  const normalized = input.operations.map((operation) => clone(operation));
+  const removedUnits = new Set<string>();
+  const edited = new Map<string, { blockIndex: number; text: string }>();
+  const inserts: Array<Extract<SurgeryOperation, { kind: "insert-note" }>> = [];
+  const affectedIndices: number[] = [];
+
+  for (const operation of normalized) {
+    if (operation.kind === "edit-text") {
+      const entry = sourceById.get(operation.entryId);
+      const unit = entryToUnit.get(operation.entryId);
+      if (!entry || !unit || !pathIndices.has(operation.entryId)) {
+        throw new SurgeryError(
+          "OFF_PATH_TARGET",
+          `Entry ${operation.entryId} is not on the active path`,
+        );
+      }
+      if (removedUnits.has(unit.id)) {
+        throw new SurgeryError(
+          "CONFLICTING_OPERATION",
+          `Entry ${entry.id} is already marked for removal`,
+        );
+      }
+      assertEditable(entry);
+      const blocks = editableTextBlocks(entry);
+      const blockIndex =
+        operation.blockIndex ??
+        (blocks.length === 1 ? blocks[0].blockIndex : 0);
+      const block = blocks.find(
+        (candidate) => candidate.blockIndex === blockIndex,
+      );
+      if (!block) {
+        throw new SurgeryError(
+          "INVALID_TEXT_BLOCK",
+          `Entry ${entry.id} has no editable text block at index ${blockIndex}`,
+        );
+      }
+      if (typeof operation.text !== "string") {
+        throw new SurgeryError("INVALID_TEXT", "Edited text must be a string");
+      }
+      edited.set(`${entry.id}:${blockIndex}`, {
+        blockIndex,
+        text: operation.text,
+      });
+      affectedIndices.push(pathIndices.get(entry.id)!);
+      continue;
+    }
+
+    if (operation.kind === "remove-unit") {
+      const unit =
+        unitById.get(operation.unitId) ?? entryToUnit.get(operation.unitId);
+      if (!unit) {
+        throw new SurgeryError(
+          "OFF_PATH_TARGET",
+          `Logical unit ${operation.unitId} is not on the active path`,
+        );
+      }
+      if (removedUnits.has(unit.id)) {
+        throw new SurgeryError(
+          "CONFLICTING_OPERATION",
+          `Unit ${unit.id} is already marked for removal`,
+        );
+      }
+      if (unit.kind === "structural") {
+        throw new SurgeryError(
+          "UNSUPPORTED_ENTRY",
+          `Entry ${unit.primaryEntryId} is structural and cannot be removed in V1`,
+        );
+      }
+      removedUnits.add(unit.id);
+      operation.unitId = unit.id;
+      affectedIndices.push(unit.startIndex);
+      continue;
+    }
+
+    const unit =
+      unitById.get(operation.anchorUnitId) ??
+      entryToUnit.get(operation.anchorUnitId);
+    if (!unit) {
+      throw new SurgeryError(
+        "OFF_PATH_TARGET",
+        `Logical unit ${operation.anchorUnitId} is not on the active path`,
+      );
+    }
+    if (!operation.text.trim()) {
+      throw new SurgeryError(
+        "INVALID_TEXT",
+        "Inserted context notes cannot be empty",
+      );
+    }
+    if (removedUnits.has(unit.id)) {
+      throw new SurgeryError(
+        "CONFLICTING_OPERATION",
+        `Unit ${unit.id} is already marked for removal`,
+      );
+    }
+    if (
+      inserts.some(
+        (item) =>
+          item.anchorUnitId === unit.id && item.position === operation.position,
+      )
+    ) {
+      throw new SurgeryError(
+        "CONFLICTING_OPERATION",
+        `A note is already staged ${operation.position} of unit ${unit.id}`,
+      );
+    }
+    operation.anchorUnitId = unit.id;
+    inserts.push({ ...operation, anchorUnitId: unit.id });
+    // Reconstruct the anchor itself so an after-note can be appended at the
+    // logical boundary without relying on an entry that was left on the old branch.
+    affectedIndices.push(unit.startIndex);
+  }
+
+  for (const key of edited.keys()) {
+    const entryId = key.split(":", 1)[0];
+    const unit = entryToUnit.get(entryId);
+    if (unit && removedUnits.has(unit.id)) {
+      throw new SurgeryError(
+        "CONFLICTING_OPERATION",
+        `Entry ${entryId} is both edited and removed`,
+      );
+    }
+  }
+  validateCompactionBoundaries(sourcePath, unitById, removedUnits);
+
+  const earliestAffectedIndex = Math.max(
+    0,
+    Math.min(...affectedIndices.filter((index) => index < sourcePath.length)),
+  );
+  validateForwardCompactionReferences(
+    sourcePath,
+    earliestAffectedIndex,
+    removedUnits,
+  );
+  const prefix = clone(sourcePath.slice(0, earliestAffectedIndex));
+  const suffix = sourcePath.slice(earliestAffectedIndex);
+  const replay: ReplayItem[] = [];
+  const insertBefore = new Map<
+    string,
+    Extract<SurgeryOperation, { kind: "insert-note" }>
+  >();
+  const insertAfter = new Map<
+    string,
+    Extract<SurgeryOperation, { kind: "insert-note" }>
+  >();
+  for (const insert of inserts) {
+    (insert.position === "before" ? insertBefore : insertAfter).set(
+      insert.anchorUnitId,
+      insert,
+    );
+  }
+
+  for (const entry of suffix) {
+    const unit = entryToUnit.get(entry.id)!;
+    if (entry.id === unit.entries[0].id) {
+      const before = insertBefore.get(unit.id);
+      if (before) replay.push(noteItem(before, "before", unit.id));
+    }
+    if (!removedUnits.has(unit.id) && isReplayableEntry(entry)) {
+      const editedEntry = applyEdits(entry, edited);
+      replay.push({ kind: "entry", sourceId: entry.id, entry: editedEntry });
+    }
+    if (entry.id === unit.entries[unit.entries.length - 1].id) {
+      const after = insertAfter.get(unit.id);
+      if (after) replay.push(noteItem(after, "after", unit.id));
+    }
+  }
+
+  const candidate = buildCandidate(prefix, replay);
+  validateCandidate(candidate);
+  validateCandidateContext(candidate);
+
+  const removedEntryIds = units
+    .filter((unit) => removedUnits.has(unit.id))
+    .flatMap((unit) => unit.entryIds);
+  const editedEntryIds = [...edited.keys()].map((key) => key.split(":", 1)[0]);
+  const warnings = [
+    ...opaqueReferenceWarnings(sourcePath, earliestAffectedIndex),
+    ...(inserts.length > 0
+      ? ["Inserted notes become visible custom context messages."]
+      : []),
+    ...(units.some(
+      (unit) => removedUnits.has(unit.id) && unit.kind === "compaction",
+    )
+      ? [
+          "Removing a compaction may make substantially more prior context active.",
+        ]
+      : []),
+  ];
+  return {
+    sourceSessionId: input.sessionId,
+    sourceLeafId: input.leafId,
+    sourceEntries,
+    sourcePath,
+    prefix,
+    replay,
+    operations: normalized,
+    removedEntryIds: [...new Set(removedEntryIds)],
+    editedEntryIds: [...new Set(editedEntryIds)],
+    insertedNoteIds: inserts.map((_, index) => `insert-note-${index + 1}`),
+    warnings,
+    earliestAffectedIndex,
+  };
+}
+
+function noteItem(
+  operation: Extract<SurgeryOperation, { kind: "insert-note" }>,
+  position: "before" | "after",
+  anchorUnitId: string,
+): ReplayItem {
+  return {
+    kind: "insert-note",
+    sourceId: `insert-note-${operation.anchorUnitId}-${position}`,
+    text: operation.text,
+    position,
+    anchorUnitId,
+  };
+}
+
+function applyEdits(
+  entry: SessionEntryLike,
+  edits: Map<string, { blockIndex: number; text: string }>,
+): SessionEntryLike {
+  const entryEdits = [...edits.entries()]
+    .filter(([key]) => key.startsWith(`${entry.id}:`))
+    .map(([, value]) => value);
+  if (entryEdits.length === 0) return clone(entry);
+  const result = clone(entry);
+  if (result.type === "compaction" || result.type === "branch_summary") {
+    result.summary = entryEdits[0].text;
+    return result;
+  }
+  if (result.type === "custom_message") {
+    result.content = replaceContent(result.content, entryEdits);
+    return result;
+  }
+  if (isObject(result.message)) {
+    const nextMessage: Record<string, unknown> = {
+      ...(result.message as Record<string, unknown>),
+      content: replaceContent(
+        (result.message as Record<string, unknown>).content,
+        entryEdits,
+      ),
+    };
+    if (nextMessage.role === "assistant") {
+      nextMessage.usage = zeroUsage();
+      delete nextMessage.errorMessage;
+      delete nextMessage.error;
+      delete nextMessage.rawStopReason;
+      delete nextMessage.diagnostics;
+      const hasToolCall =
+        Array.isArray(nextMessage.content) &&
+        nextMessage.content.some(
+          (block) => isObject(block) && block.type === "toolCall",
+        );
+      nextMessage.stopReason = hasToolCall ? "toolUse" : "stop";
+    }
+    result.message = nextMessage;
+  }
+  return result;
+}
+
+function replaceContent(
+  content: unknown,
+  edits: Array<{ blockIndex: number; text: string }>,
+): unknown {
+  if (typeof content === "string") return edits[0]?.text ?? content;
+  if (!Array.isArray(content)) return content;
+  const byIndex = new Map(edits.map((edit) => [edit.blockIndex, edit.text]));
+  return content.map((block, index) =>
+    isObject(block) && block.type === "text" && byIndex.has(index)
+      ? { ...block, text: byIndex.get(index) }
+      : block,
+  );
+}
+
+function validateCompactionBoundaries(
+  path: SessionEntryLike[],
+  unitById: Map<string, LogicalUnit>,
+  removedUnits: Set<string>,
+): void {
+  const pathIds = new Set(path.map((entry) => entry.id));
+  for (const entry of path) {
+    if (entry.type !== "compaction") continue;
+    const first =
+      typeof entry.firstKeptEntryId === "string"
+        ? entry.firstKeptEntryId
+        : undefined;
+    if (!first || !pathIds.has(first)) {
+      throw new SurgeryError(
+        "INVALID_COMPACTION_BOUNDARY",
+        `Compaction ${entry.id} references an unresolved firstKeptEntryId`,
+      );
+    }
+    const firstUnit = unitById.get(first);
+    if (
+      firstUnit &&
+      removedUnits.has(firstUnit.id) &&
+      !removedUnits.has(entry.id)
+    ) {
+      throw new SurgeryError(
+        "INVALID_COMPACTION_BOUNDARY",
+        `Compaction ${entry.id} cannot retain removed boundary entry ${first}`,
+      );
+    }
+  }
+}
+
+function validateForwardCompactionReferences(
+  path: SessionEntryLike[],
+  earliestAffectedIndex: number,
+  removedUnits: Set<string>,
+): void {
+  const indexById = new Map(path.map((entry, index) => [entry.id, index]));
+  for (const entry of path) {
+    if (entry.type !== "compaction" || removedUnits.has(entry.id)) continue;
+    const boundary =
+      typeof entry.firstKeptEntryId === "string"
+        ? indexById.get(entry.firstKeptEntryId)
+        : undefined;
+    const compactionIndex = indexById.get(entry.id);
+    if (boundary === undefined || compactionIndex === undefined) continue;
+    if (
+      compactionIndex >= earliestAffectedIndex &&
+      boundary > compactionIndex
+    ) {
+      throw new SurgeryError(
+        "UNSUPPORTED_FORWARD_COMPACTION_REFERENCE",
+        `Compaction ${entry.id} points into the reconstructed suffix; edit a later entry or remove the compaction first`,
+      );
+    }
+  }
+}
+
+function isReplayableEntry(entry: SessionEntryLike): boolean {
+  if (entry.type === "session_info") return false;
+  if (
+    entry.type === "custom" &&
+    (entry.customType === "pi-tree-editor.surgery" ||
+      entry.customType === "pi-tree-editor.recovery")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function buildCandidate(
+  prefix: SessionEntryLike[],
+  replay: ReplayItem[],
+): SessionEntryLike[] {
+  const result = clone(prefix);
+  const oldToCandidate = new Map(prefix.map((entry) => [entry.id, entry.id]));
+  let parentId = result.at(-1)?.id ?? null;
+  for (const item of replay) {
+    if (item.kind === "insert-note") {
+      const candidateId = `candidate:${item.sourceId}`;
+      result.push({
+        type: "custom_message",
+        id: candidateId,
+        parentId,
+        timestamp: new Date(0).toISOString(),
+        customType: "pi-tree-editor.note",
+        content: item.text,
+        display: true,
+        details: { anchorUnitId: item.anchorUnitId, position: item.position },
+      });
+      parentId = candidateId;
+      oldToCandidate.set(item.sourceId, candidateId);
+      continue;
+    }
+    const entry = clone(item.entry);
+    const candidateId = `candidate:${item.sourceId}`;
+    entry.id = candidateId;
+    entry.parentId = parentId;
+    if (
+      entry.type === "compaction" &&
+      typeof entry.firstKeptEntryId === "string"
+    ) {
+      entry.firstKeptEntryId =
+        oldToCandidate.get(entry.firstKeptEntryId) ?? entry.firstKeptEntryId;
+    }
+    if (entry.type === "branch_summary" && typeof entry.fromId === "string") {
+      entry.fromId = oldToCandidate.get(entry.fromId) ?? entry.fromId;
+    }
+    if (entry.type === "label" && typeof entry.targetId === "string") {
+      entry.targetId = oldToCandidate.get(entry.targetId) ?? entry.targetId;
+    }
+    result.push(entry);
+    oldToCandidate.set(item.sourceId, candidateId);
+    parentId = candidateId;
+  }
+  return result;
+}
+
+function validateCandidateContext(entries: SessionEntryLike[]): void {
+  try {
+    buildSessionContext(entries as never, entries.at(-1)?.id ?? null);
+  } catch (error) {
+    throw new SurgeryError(
+      "INVALID_CONTEXT",
+      `Candidate session context could not be built: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+function zeroUsage(): Record<string, unknown> {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+function opaqueReferenceWarnings(
+  path: SessionEntryLike[],
+  earliestAffectedIndex: number,
+): string[] {
+  const sourceIds = path.slice(earliestAffectedIndex).map((entry) => entry.id);
+  const warnings: string[] = [];
+  for (const entry of path.slice(earliestAffectedIndex)) {
+    if (entry.type !== "custom" || entry.data === undefined) continue;
+    const encoded = JSON.stringify(entry.data);
+    if (sourceIds.some((id) => encoded.includes(id))) {
+      warnings.push(
+        `Opaque custom entry ${entry.id} contains a source ID; nested references were not remapped.`,
+      );
+    }
+  }
+  return warnings;
+}
+
+function validateCandidate(entries: SessionEntryLike[]): void {
+  const byId = indexEntries(entries);
+  for (const entry of entries) {
+    if (entry.parentId !== null && !byId.has(entry.parentId)) {
+      throw new SurgeryError(
+        "INVALID_PARENT",
+        `Entry ${entry.id} has a missing parent`,
+      );
+    }
+    if (
+      entry.type === "compaction" &&
+      typeof entry.firstKeptEntryId === "string" &&
+      !byId.has(entry.firstKeptEntryId)
+    ) {
+      throw new SurgeryError(
+        "INVALID_COMPACTION_BOUNDARY",
+        `Compaction ${entry.id} has an unresolved candidate boundary`,
+      );
+    }
+  }
+}
