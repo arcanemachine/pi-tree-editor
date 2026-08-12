@@ -47,7 +47,7 @@ Edit mode shows its key help persistently:
 
 ```text
 S review & save · E edit · D remove · A after · Shift+A before · U undo
-Escape opens exit confirmation · Tab stays in edit mode until saved or discarded
+Escape confirms exit · Tab stays in edit mode until saved or discarded
 ```
 
 ### Editing controls

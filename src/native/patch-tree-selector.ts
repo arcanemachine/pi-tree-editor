@@ -5,7 +5,12 @@ import {
   buildLogicalUnits,
   editableTextBlocks,
 } from "../surgery/logical-units.js";
-import { Container, Input, Text } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Input,
+  Text,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
 import type { SessionEntryLike } from "../surgery/types.js";
 import type { SessionManagerAdapter } from "../surgery/replay.js";
 import { auditPreview } from "../audit.js";
@@ -17,11 +22,11 @@ import {
 } from "./patch-state.js";
 
 const PATCHED = Symbol.for("arcanemachine.pi-tree-editor.selector-patched");
-const RENDER_PATCHED = Symbol.for(
-  "arcanemachine.pi-tree-editor.render-patched",
-);
 const SELECTOR_RENDER_PATCHED = Symbol.for(
   "arcanemachine.pi-tree-editor.selector-render-patched",
+);
+const HELP_RENDER_PATCHED = Symbol.for(
+  "arcanemachine.pi-tree-editor.help-render-patched",
 );
 
 type SelectorLike = {
@@ -38,7 +43,8 @@ type TreeListLike = {
 
 export function patchTreeSelector(module: Record<string, unknown>): boolean {
   const component = module.TreeSelectorComponent as
-    { prototype?: SelectorLike } | undefined;
+    | { prototype?: SelectorLike }
+    | undefined;
   const prototype = component?.prototype;
   if (!prototype || prototype[PATCHED]) return Boolean(prototype?.[PATCHED]);
   const originalHandleInput = prototype.handleInput;
@@ -55,9 +61,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
   }
 
   const getList = function (this: SelectorLike): TreeListLike {
-    const list = originalGetTreeList.call(this) as TreeListLike;
-    patchTreeListRender(list, () => selectorState(this));
-    return list;
+    return originalGetTreeList.call(this) as TreeListLike;
   };
   prototype.getTreeList = getList;
   patchSelectorRender(prototype);
@@ -97,14 +101,12 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
     const list = this.getTreeList?.() as TreeListLike | undefined;
     const selected = list?.getSelectedNode?.();
     if (keyData === "\u001b") {
-      const ctx = getExtensionContext();
       showExitConfirmation(this, state, list);
       return;
     }
     if (keyData === "u" || keyData === "U") {
       state.operations.pop();
       if (state.operations.length === 0) state.snapshot = undefined;
-      patchTreeListRender(list);
       getExtensionContext()?.ui.notify("Undid latest staged tree edit", "info");
       return;
     }
@@ -112,7 +114,6 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
       if (!selected) return;
       if (!isActivePathEntry(selected.entry.id)) return;
       toggleRemoval(state, selected.entry.id);
-      patchTreeListRender(list);
       return;
     }
     if (keyData === "a" || keyData === "A") {
@@ -162,7 +163,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
         getExtensionContext()?.ui.notify("No staged tree edits", "info");
         return;
       }
-      void previewAndApply(this, state, list);
+      showSaveReview(this, state, list);
       return;
     }
     // Keep navigation, filtering, folding, copying, and label editing native.
@@ -176,63 +177,66 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
 function patchSelectorRender(prototype: SelectorLike): void {
   if (prototype[SELECTOR_RENDER_PATCHED]) return;
   const inherited = Object.getPrototypeOf(prototype) as
-    { render?: (width: number) => string[] } | undefined;
+    | { render?: (width: number) => string[] }
+    | undefined;
   const originalRender = prototype.render ?? inherited?.render;
   if (typeof originalRender !== "function") return;
   prototype.render = function (this: SelectorLike, width: number): string[] {
-    const state = selectorState(this);
-    const lines = state.inlineInput
-      ? [
-          "  Tree editor input: Enter stage change · Escape cancel input",
-          "  Save: return to the tree, then press S to review and apply",
-        ]
-      : state.flow === "save-review"
-        ? ["  Tree editor review: A apply changes · B/Escape back to editing"]
-        : state.flow === "exit-confirm"
-          ? [
-              "  Exit tree without saving? D discard and exit · K/Escape keep editing",
-            ]
-          : state.editMode
-            ? [
-                "  Tree editor ON: S review & save · E edit · D remove · A after · Shift+A before · U undo",
-                "  Escape opens exit confirmation · Tab stays in mode until saved or discarded",
-              ]
-            : ["  Tree editor: Tab edit mode · Escape exit /tree"];
-    return [...lines, ...originalRender.call(this, width)];
+    patchSelectorHelp(this);
+    return originalRender.call(this, width);
   };
   prototype[SELECTOR_RENDER_PATCHED] = true;
 }
 
-function patchTreeListRender(
-  list: TreeListLike | undefined,
-  stateProvider?: () => ReturnType<typeof selectorState>,
-): void {
-  if (!list || typeof list.render !== "function" || list[RENDER_PATCHED])
-    return;
-  const originalRender = list.render;
-  list.render = function (this: TreeListLike, width: number): string[] {
-    const rows = originalRender.call(this, width);
-    const state = stateProvider?.() ?? selectorState(this as object);
-    const mode = state.editMode ? "ON" : "off";
-    const staged = state.operations.length;
-    const stagedSummary = state.operations
-      .map((operation) => {
-        if (operation.kind === "edit-text") {
-          return `edit:${operation.entryId.slice(0, 8)}`;
-        }
-        if (operation.kind === "remove-unit") {
-          return `remove:${operation.unitId.slice(0, 8)}`;
-        }
-        return `${operation.position}:${operation.anchorUnitId.slice(0, 8)}`;
-      })
-      .join(" ");
-    return [
-      `  Tree editor: ${mode} | staged: ${staged}`,
-      ...(stagedSummary ? [`  Staged markers: ${stagedSummary}`] : []),
-      ...rows,
-    ];
+function patchSelectorHelp(selector: SelectorLike): void {
+  const children = selector.children;
+  if (!Array.isArray(children)) return;
+  const help = children.find((child) => {
+    if (!child || typeof child !== "object") return false;
+    const candidate = child as Record<string | symbol, unknown>;
+    if (
+      candidate[HELP_RENDER_PATCHED] ||
+      typeof candidate.render !== "function"
+    ) {
+      return false;
+    }
+    return (
+      (child as { constructor?: { name?: string } }).constructor?.name ===
+      "TreeHelp"
+    );
+  }) as Record<string | symbol, unknown> | undefined;
+  if (!help || typeof help.render !== "function") return;
+  const originalRender = help.render as (width: number) => string[];
+  help.render = function (this: object, width: number): string[] {
+    const native = originalRender.call(this, width);
+    return [...native, ...editorHelpLines(selectorState(selector), width)];
   };
-  list[RENDER_PATCHED] = true;
+  help[HELP_RENDER_PATCHED] = true;
+}
+
+function editorHelpLines(
+  state: ReturnType<typeof selectorState>,
+  width: number,
+): string[] {
+  const first = state.inlineInput
+    ? "Tree editor input: Enter stage change · Escape cancel input"
+    : state.flow === "save-review"
+      ? "Tree editor review: A apply · B/Escape back to editing"
+      : state.flow === "exit-confirm"
+        ? "Exit tree: D discard and exit · K/Escape keep editing"
+        : state.editMode
+          ? "Tree editor ON: S save · E edit · D remove · A/Shift+A insert · U undo"
+          : "Tree editor: Tab edit mode · Escape exit /tree";
+  const second = state.inlineInput
+    ? "Return to the tree, then press S to review and save"
+    : state.flow
+      ? `Staged changes: ${state.operations.length}`
+      : state.editMode
+        ? `Staged: ${state.operations.length} · Escape confirms exit · Tab leaves only when clean`
+        : "Normal tree navigation and search remain active";
+  return [first, second].map((line) =>
+    truncateToWidth(`  ${line}`, Math.max(1, width)),
+  );
 }
 
 function getManager(): Record<string, any> | undefined {
@@ -319,7 +323,6 @@ async function insertNote(
         position,
         text,
       });
-      patchTreeListRender(list);
       ctx.ui.notify("Context note staged", "info");
       return true;
     },
@@ -353,7 +356,6 @@ async function editEntry(
           blockIndex: block.blockIndex,
           text,
         });
-        patchTreeListRender(list);
         ctx.ui.notify("Conversation edit staged", "info");
         return true;
       },
@@ -398,9 +400,11 @@ function showFlowComponent(
   onCancel: () => void = onFinish,
 ): void {
   const labelInputContainer = selector.labelInputContainer as
-    { clear(): void; addChild(child: unknown): void } | undefined;
+    | { clear(): void; addChild(child: unknown): void }
+    | undefined;
   const treeContainer = selector.treeContainer as
-    { clear(): void; addChild(child: unknown): void } | undefined;
+    | { clear(): void; addChild(child: unknown): void }
+    | undefined;
   const list = selector.getTreeList?.() as TreeListLike | undefined;
   if (!labelInputContainer || !treeContainer || !list) return;
   const container = new Container();
@@ -477,20 +481,30 @@ function showSaveReview(
 ): void {
   const ctx = getExtensionContext();
   if (!ctx || !state.snapshot) return;
+  let preview: string[];
+  try {
+    preview = auditPreview(
+      planSurgery({
+        entries: state.snapshot.entries,
+        leafId: state.snapshot.leafId,
+        sessionId: state.snapshot.sessionId,
+        operations: state.operations,
+      }),
+    );
+  } catch (error) {
+    ctx.ui.notify(
+      error instanceof Error ? error.message : String(error),
+      "error",
+    );
+    return;
+  }
   state.flow = "save-review";
   showFlowComponent(
     selector,
     state,
     [
       "Review and save tree edits",
-      ...auditPreview(
-        planSurgery({
-          entries: state.snapshot.entries,
-          leafId: state.snapshot.leafId,
-          sessionId: state.snapshot.sessionId,
-          operations: state.operations,
-        }),
-      ),
+      ...preview,
       "A apply changes · B back to editing · Escape back to editing",
     ],
     (data) => {
@@ -515,9 +529,11 @@ function startInlineEdit(
   list: TreeListLike | undefined,
 ): void {
   const labelInputContainer = selector.labelInputContainer as
-    { clear(): void; addChild(child: unknown): void } | undefined;
+    | { clear(): void; addChild(child: unknown): void }
+    | undefined;
   const treeContainer = selector.treeContainer as
-    { clear(): void; addChild(child: unknown): void } | undefined;
+    | { clear(): void; addChild(child: unknown): void }
+    | undefined;
   if (!labelInputContainer || !treeContainer) {
     getExtensionContext()?.ui.notify(
       "Inline tree editing is unavailable in this Pi build",

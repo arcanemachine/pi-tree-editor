@@ -32,7 +32,8 @@ export function probeInteractiveModule(
   module: Record<string, unknown>,
 ): string | undefined {
   const candidate = module.InteractiveMode as
-    { prototype?: Record<string, unknown> } | undefined;
+    | { prototype?: Record<string, unknown> }
+    | undefined;
   if (
     !candidate?.prototype ||
     typeof candidate.prototype.showTreeSelector !== "function"

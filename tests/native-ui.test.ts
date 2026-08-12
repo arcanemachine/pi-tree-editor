@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { installNativeHooks } from "../src/native/internal-imports.js";
 import {
   selectorState,
@@ -68,9 +69,7 @@ describe("native tree editor interaction", () => {
 
     selector.handleInput("s");
     expect(selectorState(selector).flow).toBe("save-review");
-    expect(selector.render(100).join("\n")).toContain(
-      "review: A apply changes",
-    );
+    expect(selector.render(100).join("\n")).toContain("review: A apply");
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBeUndefined();
     expect(selectorState(selector).operations).toHaveLength(1);
@@ -80,6 +79,47 @@ describe("native tree editor interaction", () => {
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBeUndefined();
     expect(selectorState(selector).operations).toHaveLength(1);
+  });
+
+  it("keeps long-message tree rendering bounded while navigating", async () => {
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-overflow-test",
+    );
+    let parent: string | null = null;
+    for (let index = 0; index < 12; index += 1) {
+      parent = manager.appendMessage({
+        role: "user",
+        content: `${index}: ${"long message content ".repeat(20)}`,
+        timestamp: index,
+      });
+    }
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      parent,
+      24,
+      () => undefined,
+      () => undefined,
+    );
+    const list = selector.getTreeList();
+    const initialCount = list.render(48).length;
+    for (let index = 0; index < 20; index += 1) {
+      selector.handleInput(index % 2 === 0 ? "\u001b[B" : "\u001b[A");
+      const lines = list.render(48);
+      expect(lines).toHaveLength(initialCount);
+      expect(lines.every((line: string) => visibleWidth(line) <= 48)).toBe(
+        true,
+      );
+    }
+    selector.handleInput("\t");
+    expect(list.render(48)).toHaveLength(initialCount);
+    expect(
+      selector.render(48).every((line: string) => visibleWidth(line) <= 48),
+    ).toBe(true);
   });
 
   it("requires an explicit discard choice to exit with no staged changes", async () => {
@@ -110,9 +150,7 @@ describe("native tree editor interaction", () => {
       },
     );
     selector.handleInput("\t");
-    expect(selector.render(100).join("\n")).toContain(
-      "Escape opens exit confirmation",
-    );
+    expect(selector.render(100).join("\n")).toContain("Escape confirms exit");
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBe("exit-confirm");
     selector.handleInput("k");

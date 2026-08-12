@@ -5,7 +5,8 @@ const PATCHED = "__piTreeEditorInteractivePatched";
 
 export function patchInteractiveMode(module: Record<string, unknown>): boolean {
   const constructor = module.InteractiveMode as
-    { prototype?: Record<string, any> } | undefined;
+    | { prototype?: Record<string, any> }
+    | undefined;
   const prototype = constructor?.prototype;
   const reason = probeInteractiveModule(module);
   if (reason || !prototype) {
