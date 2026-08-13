@@ -19,6 +19,7 @@ import {
   getActiveMode,
   getExtensionContext,
   selectorState,
+  reportHookFailure,
   setHookStatus,
 } from "./patch-state.js";
 
@@ -54,10 +55,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
     typeof originalHandleInput !== "function" ||
     typeof originalGetTreeList !== "function"
   ) {
-    setHookStatus({
-      enabled: false,
-      reason: "Tree selector methods are unavailable",
-    });
+    reportHookFailure("Tree selector methods are unavailable");
     return false;
   }
 
