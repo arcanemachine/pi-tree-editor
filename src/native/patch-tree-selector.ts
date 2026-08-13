@@ -89,7 +89,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
       const ctx = getExtensionContext();
       if (state.editMode && state.operations.length > 0) {
         ctx?.ui.notify(
-          "Save with S or discard with Escape before leaving edit mode",
+          "Save with s or discard with Escape before leaving edit mode",
           "info",
         );
         return;
@@ -97,7 +97,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
       state.editMode = !state.editMode;
       ctx?.ui.notify(
         state.editMode
-          ? "Tree editor mode: S save, E edit, D remove, A after, Shift+A before, U undo"
+          ? "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u undo"
           : "Tree editor mode off",
         "info",
       );
@@ -164,7 +164,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
     if (keyData === "\r" || keyData === "\n") {
       getExtensionContext()?.ui.notify(
         state.operations.length > 0
-          ? "Use S to save staged tree edits"
+          ? "Use s to save staged tree edits"
           : "No staged tree edits",
         "info",
       );
@@ -252,7 +252,7 @@ function editorHelpLine(
       : state.flow === "exit-confirm"
         ? "Exit tree: Cancel keep editing · Yes apply · No discard"
         : state.editMode
-          ? "Tree editor ON: S save · E edit · D remove · A/Shift+A insert · U undo"
+          ? "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u undo"
           : "Tree editor: Tab edit mode · Escape exit /tree";
   return truncateToWidth(`  ${line}`, Math.max(1, width));
 }

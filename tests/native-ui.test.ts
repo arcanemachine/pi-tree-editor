@@ -30,10 +30,11 @@ describe("native tree editor interaction", () => {
       timestamp: 1,
     });
     setActiveMode({ sessionManager: manager } as never);
+    const notifications: string[] = [];
     setExtensionContext({
       hasUI: true,
       ui: {
-        notify: () => undefined,
+        notify: (message: string) => notifications.push(message),
         select: async () => undefined,
         editor: async () => {
           throw new Error("modal editor should not be used");
@@ -49,7 +50,12 @@ describe("native tree editor interaction", () => {
     );
     expect(selector.render(100).join("\n")).toContain("Tab edit mode");
     selector.handleInput("\t");
-    expect(selector.render(100).join("\n")).toContain("Tree editor ON");
+    expect(selector.render(100).join("\n")).toContain(
+      "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u undo",
+    );
+    expect(notifications.at(-1)).toContain(
+      "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u undo",
+    );
     selector.handleInput("a");
     selector.handleInput("n");
     selector.handleInput("o");

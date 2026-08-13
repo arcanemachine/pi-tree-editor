@@ -47,19 +47,21 @@ Open Pi's native tree with `/tree`, then press `Tab` to enter edit mode. The sel
 Edit mode shows its key help persistently:
 
 ```text
-S save staged edits · E edit · D remove · A after · Shift+A before · U undo
+s save staged edits · e edit · d remove · a after · Shift+A before · u undo
 Escape exits directly when unchanged, or opens Cancel / Yes / No when staged
 ```
 
 ### Editing controls
 
-- `E` — edit a supported text block inline.
-- `D` — stage or unstage removal of a logical unit.
-- `A` — insert a visible context note after the selected unit.
+- `e` — edit a supported text block inline.
+- `d` — stage or unstage removal of a logical unit.
+- `a` — insert a visible context note after the selected unit.
 - `Shift+A` — insert a visible context note before the selected unit.
-- `U` — undo the latest staged operation.
-- `S` — open the in-tree save menu showing the staged item count; `Yes` applies, and `Cancel` keeps editing with staged changes.
+- `u` — undo the latest staged operation.
+- `s` — open the in-tree save menu showing the staged item count; `Yes` applies, and `Cancel` keeps editing with staged changes.
 - `Escape` — cancel inline input; with no staged changes, exit `/tree` directly. With staged changes, open `Cancel / Yes / No`: `Cancel` keeps editing, `Yes` applies, and `No` discards and exits.
+
+Command keys are shown lowercase; uppercase aliases remain accepted.
 
 Inline input uses `Enter` to stage a change and `Escape` to cancel the input. Confirmation menus are selector-local: use Up/Down and Enter, or Escape for Cancel. Save defaults to `Yes`; exit defaults to `Cancel`. Planning failures leave staged changes intact. No key silently applies or discards staged work.
 
