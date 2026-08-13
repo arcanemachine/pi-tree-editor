@@ -7,10 +7,12 @@ import {
 } from "../surgery/logical-units.js";
 import {
   Container,
+  getKeybindings,
   Input,
   Text,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
+import * as PiTui from "@earendil-works/pi-tui";
 import type { SessionEntryLike } from "../surgery/types.js";
 import type { SessionManagerAdapter } from "../surgery/replay.js";
 import { auditPreview } from "../audit.js";
@@ -72,7 +74,13 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
       return;
     }
     if (state.inlineInput) {
-      state.inlineInput.input.handleInput(keyData);
+      if (keyData === "\u001b") {
+        state.inlineInput.cancel();
+      } else if (isPlainInlineSubmit(keyData)) {
+        state.inlineInput.submit();
+      } else {
+        state.inlineInput.input.handleInput(keyData);
+      }
       return;
     }
     if (keyData === "\t") {
@@ -186,6 +194,14 @@ function patchSelectorRender(prototype: SelectorLike): void {
     return originalRender.call(this, width);
   };
   prototype[SELECTOR_RENDER_PATCHED] = true;
+}
+
+function isPlainInlineSubmit(keyData: string): boolean {
+  const keybindings = getKeybindings();
+  return (
+    keybindings.matches(keyData, "tui.input.submit") &&
+    !keybindings.matches(keyData, "tui.input.newLine")
+  );
 }
 
 function patchSelectorHelp(selector: SelectorLike): void {
@@ -513,6 +529,46 @@ function showSaveReview(
   );
 }
 
+type MultilineEditorLike = {
+  focused: boolean;
+  onSubmit?: (text: string) => void;
+  setText(text: string): void;
+  getText(): string;
+  handleInput(data: string): void;
+  render(width: number): string[];
+};
+
+function createMultilineEditor(
+  prefill: string,
+): MultilineEditorLike | undefined {
+  const tui = getActiveMode()?.ui;
+  if (!tui || typeof tui !== "object") return undefined;
+  try {
+    const terminal = (tui as Record<string, any>).terminal;
+    if (!terminal || typeof terminal.rows !== "number") return undefined;
+    const EditorComponent = (
+      PiTui as unknown as {
+        Editor?: new (tui: any, theme: any) => MultilineEditorLike;
+      }
+    ).Editor;
+    if (!EditorComponent) return undefined;
+    const editor = new EditorComponent(tui as any, {
+      borderColor: (text: string) => text,
+      selectList: {
+        selectedPrefix: (text: string) => text,
+        selectedText: (text: string) => text,
+        description: (text: string) => text,
+        scrollInfo: (text: string) => text,
+        noMatch: (text: string) => text,
+      },
+    });
+    editor.setText(prefill);
+    return editor;
+  } catch {
+    return undefined;
+  }
+}
+
 function startInlineEdit(
   selector: SelectorLike,
   state: ReturnType<typeof selectorState>,
@@ -533,8 +589,21 @@ function startInlineEdit(
     );
     return;
   }
-  const input = new Input();
-  input.setValue(prefill);
+  const input = /[\r\n]/.test(prefill)
+    ? createMultilineEditor(prefill)
+    : new Input();
+  if (!input) {
+    getExtensionContext()?.ui.notify(
+      "Multiline inline tree editing is unavailable in this Pi build",
+      "warning",
+    );
+    return;
+  }
+  if (input instanceof Input) input.setValue(prefill);
+  const isMultilineEditor = !(input instanceof Input);
+  const initialEditorText = isMultilineEditor
+    ? (input as MultilineEditorLike).getText()
+    : undefined;
   input.focused = Boolean(selector.focused);
   const finish = () => {
     state.inlineInput = undefined;
@@ -543,11 +612,20 @@ function startInlineEdit(
     if (list) treeContainer.addChild(list);
     getExtensionContext()?.ui.notify("Inline tree input closed", "info");
   };
-  input.onSubmit = (value) => {
-    if (onSubmit(value)) finish();
+  const submittedValue = (value: string): string =>
+    isMultilineEditor && value === initialEditorText ? prefill : value;
+  const submit = (value: string) => {
+    if (onSubmit(submittedValue(value))) finish();
   };
-  input.onEscape = finish;
-  state.inlineInput = { input, finish, cancel: finish };
+  const submitInline = () => {
+    const value = isMultilineEditor
+      ? (input as MultilineEditorLike).getText()
+      : (input as Input).getValue();
+    submit(value);
+  };
+  input.onSubmit = submit;
+  if (input instanceof Input) input.onEscape = finish;
+  state.inlineInput = { input, finish, cancel: finish, submit: submitInline };
   treeContainer.clear();
   labelInputContainer.clear();
   labelInputContainer.addChild(input);

@@ -18,9 +18,10 @@ export type SelectorState = {
     cancel(): void;
   };
   inlineInput?: {
-    input: { handleInput(data: string): void; setValue(value: string): void };
+    input: { handleInput(data: string): void };
     finish(): void;
     cancel(): void;
+    submit(): void;
   };
 };
 

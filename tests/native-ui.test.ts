@@ -266,6 +266,192 @@ describe("native tree editor interaction", () => {
     expectNativeHeight();
   });
 
+  it("keeps multiline inline edits stable and round-trips newlines", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-multiline-input-regression",
+    );
+    const text = "Quiet morning dew—\na single leaf catches the light.";
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: text,
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: manager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+
+    const width = 32;
+    const render = () => {
+      const lines = selector.render(width);
+      expect(
+        lines.every(
+          (line: string) =>
+            !line.includes("\n") &&
+            !line.includes("\r") &&
+            visibleWidth(line) <= width,
+        ),
+      ).toBe(true);
+      return lines;
+    };
+    const initialLines = render();
+    for (let index = 0; index < 24; index += 1) {
+      selector.handleInput(index % 2 === 0 ? "\u001b[D" : "\u001b[C");
+      expect(render()).toHaveLength(initialLines.length);
+    }
+
+    selector.handleInput("\r");
+    expect(selectorState(selector).inlineInput).toBeUndefined();
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 0,
+        text,
+      },
+    ]);
+
+    selector.handleInput("e");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).inlineInput).toBeUndefined();
+    expect(selectorState(selector).operations).toHaveLength(1);
+  });
+
+  it("preserves multiline whitespace and newline forms", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const texts = [
+      "  leading space\r\ntrailing space  ",
+      "  leading carriage\rtrailing carriage  ",
+    ];
+    for (const text of texts) {
+      const manager = SessionManager.inMemory(
+        "/tmp/pi-tree-editor-multiline-whitespace-regression",
+      );
+      const leafId = manager.appendMessage({
+        role: "user",
+        content: text,
+        timestamp: 1,
+      });
+      setActiveMode({
+        sessionManager: manager,
+        ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+      } as never);
+      setExtensionContext({
+        hasUI: true,
+        ui: { notify: () => undefined },
+      } as never);
+      const selector = new TreeSelectorComponent(
+        manager.getTree(),
+        leafId,
+        30,
+        () => undefined,
+        () => undefined,
+      );
+      selector.handleInput("\t");
+      selector.handleInput("e");
+      const lines = selector.render(32);
+      expect(
+        lines.every(
+          (line: string) =>
+            !line.includes("\n") &&
+            !line.includes("\r") &&
+            visibleWidth(line) <= 32,
+        ),
+      ).toBe(true);
+      selector.handleInput("\r");
+      expect(selectorState(selector).operations[0]).toMatchObject({
+        kind: "edit-text",
+        text,
+      });
+    }
+
+    const changedText = "  keep leading\nkeep trailing  ";
+    const changedManager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-multiline-changed-regression",
+    );
+    const changedLeafId = changedManager.appendMessage({
+      role: "user",
+      content: changedText,
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: changedManager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    const changedSelector = new TreeSelectorComponent(
+      changedManager.getTree(),
+      changedLeafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    changedSelector.handleInput("\t");
+    changedSelector.handleInput("e");
+    changedSelector.handleInput("\n");
+    changedSelector.handleInput("!");
+    changedSelector.handleInput("\r");
+    expect(selectorState(changedSelector).operations[0]).toMatchObject({
+      kind: "edit-text",
+      text: `${changedText}\n!`,
+    });
+
+    const revertedText = "  revert leading\r\nrevert trailing  ";
+    const revertedManager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-multiline-revert-regression",
+    );
+    const revertedLeafId = revertedManager.appendMessage({
+      role: "user",
+      content: revertedText,
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: revertedManager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    const revertedSelector = new TreeSelectorComponent(
+      revertedManager.getTree(),
+      revertedLeafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    revertedSelector.handleInput("\t");
+    revertedSelector.handleInput("e");
+    revertedSelector.handleInput("!");
+    revertedSelector.handleInput("\x7f");
+    revertedSelector.handleInput("\r");
+    expect(selectorState(revertedSelector).operations[0]).toMatchObject({
+      kind: "edit-text",
+      text: revertedText,
+    });
+  });
+
   it("stays bounded through repeated narrow multiline navigation and state changes", async () => {
     await installNativeHooks();
     const treeSelectorUrl = new URL(
