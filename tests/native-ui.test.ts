@@ -150,7 +150,7 @@ describe("native tree editor interaction", () => {
       },
     );
     selector.handleInput("\t");
-    expect(selector.render(100).join("\n")).toContain("Escape confirms exit");
+    expect(selector.render(100).join("\n")).toContain("Tree editor ON");
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBe("exit-confirm");
     selector.handleInput("k");
@@ -161,5 +161,147 @@ describe("native tree editor interaction", () => {
     expect(selectorState(selector).flow).toBe("exit-confirm");
     selector.handleInput("d");
     expect(exited).toBe(true);
+  });
+
+  it("keeps native selector height while editor states replace its content", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const nativeUrl = `${treeSelectorUrl}?native-height-regression`;
+    const [
+      { TreeSelectorComponent },
+      { TreeSelectorComponent: NativeSelector },
+    ] = await Promise.all([import(treeSelectorUrl), import(nativeUrl)]);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-height-regression",
+    );
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: "long initial message\nwith multiple lines\n".repeat(4),
+      timestamp: 1,
+    });
+    setActiveMode({ sessionManager: manager } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: {
+        notify: () => undefined,
+        select: async () => undefined,
+        editor: async () => {
+          throw new Error("modal editor should not be used");
+        },
+      },
+    } as never);
+    const width = 18;
+    const createSelector = (Selector: typeof TreeSelectorComponent) =>
+      new Selector(
+        manager.getTree(),
+        leafId,
+        30,
+        () => undefined,
+        () => undefined,
+      );
+    const selector = createSelector(TreeSelectorComponent);
+    const native = createSelector(NativeSelector);
+    const expectNativeHeight = () =>
+      expect(selector.render(width)).toHaveLength(native.render(width).length);
+
+    expectNativeHeight();
+    expect(selector.render(100).join("\n")).toContain(
+      "Tree editor: Tab edit mode",
+    );
+    selector.handleInput("\t");
+    expectNativeHeight();
+    expect(selector.render(100).join("\n")).toContain("Tree editor ON");
+
+    selector.handleInput("a");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    expect(selector.render(100).join("\n")).toContain("Tree editor input");
+    native.treeContainer.clear();
+    native.labelInputContainer.clear();
+    native.labelInputContainer.addChild(
+      selector.labelInputContainer.children[0],
+    );
+    expectNativeHeight();
+
+    selector.handleInput("x");
+    selector.handleInput("\r");
+    selector.handleInput("s");
+    expect(selectorState(selector).flow).toBe("save-review");
+    expect(selector.render(100).join("\n")).toContain("Tree editor review");
+    native.treeContainer.clear();
+    native.labelInputContainer.clear();
+    native.treeContainer.addChild(selector.labelInputContainer.children[0]);
+    expectNativeHeight();
+
+    selector.handleInput("\u001b");
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("exit-confirm");
+    expect(selector.render(100).join("\n")).toContain("Exit tree: D discard");
+    native.treeContainer.clear();
+    native.labelInputContainer.clear();
+    native.treeContainer.addChild(selector.labelInputContainer.children[0]);
+    expectNativeHeight();
+  });
+
+  it("stays bounded through repeated narrow multiline navigation and state changes", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-narrow-overflow-regression",
+    );
+    let leafId: string | null = null;
+    for (let index = 0; index < 18; index += 1) {
+      leafId = manager.appendMessage({
+        role: "user",
+        content: `${"multiline long content ".repeat(12)}\n${"second line ".repeat(12)}`,
+        timestamp: index,
+      });
+    }
+    setActiveMode({ sessionManager: manager } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    const width = 10;
+    const render = () => {
+      const lines = selector.render(width);
+      expect(lines.every((line: string) => visibleWidth(line) <= width)).toBe(
+        true,
+      );
+      return lines.length;
+    };
+    const normalHeight = render();
+    for (let index = 0; index < 30; index += 1) {
+      selector.handleInput(index % 2 === 0 ? "\u001b[B" : "\u001b[A");
+      expect(render()).toBe(normalHeight);
+    }
+    selector.handleInput("\t");
+    expect(render()).toBe(normalHeight);
+    selector.handleInput("a");
+    expect(render()).toBeLessThan(normalHeight);
+    selector.handleInput("m");
+    selector.handleInput("\r");
+    expect(render()).toBe(normalHeight);
+    selector.handleInput("s");
+    const reviewHeight = render();
+    expect(render()).toBe(reviewHeight);
+    selector.handleInput("\u001b");
+    expect(render()).toBe(normalHeight);
+    selector.handleInput("\u001b");
+    const exitHeight = render();
+    expect(render()).toBe(exitHeight);
   });
 });

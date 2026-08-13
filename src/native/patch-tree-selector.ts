@@ -209,16 +209,17 @@ function patchSelectorHelp(selector: SelectorLike): void {
   const originalRender = help.render as (width: number) => string[];
   help.render = function (this: object, width: number): string[] {
     const native = originalRender.call(this, width);
-    return [...native, ...editorHelpLines(selectorState(selector), width)];
+    if (native.length === 0) return native;
+    return [editorHelpLine(selectorState(selector), width), ...native.slice(1)];
   };
   help[HELP_RENDER_PATCHED] = true;
 }
 
-function editorHelpLines(
+function editorHelpLine(
   state: ReturnType<typeof selectorState>,
   width: number,
-): string[] {
-  const first = state.inlineInput
+): string {
+  const line = state.inlineInput
     ? "Tree editor input: Enter stage change · Escape cancel input"
     : state.flow === "save-review"
       ? "Tree editor review: A apply · B/Escape back to editing"
@@ -227,16 +228,7 @@ function editorHelpLines(
         : state.editMode
           ? "Tree editor ON: S save · E edit · D remove · A/Shift+A insert · U undo"
           : "Tree editor: Tab edit mode · Escape exit /tree";
-  const second = state.inlineInput
-    ? "Return to the tree, then press S to review and save"
-    : state.flow
-      ? `Staged changes: ${state.operations.length}`
-      : state.editMode
-        ? `Staged: ${state.operations.length} · Escape confirms exit · Tab leaves only when clean`
-        : "Normal tree navigation and search remain active";
-  return [first, second].map((line) =>
-    truncateToWidth(`  ${line}`, Math.max(1, width)),
-  );
+  return truncateToWidth(`  ${line}`, Math.max(1, width));
 }
 
 function getManager(): Record<string, any> | undefined {
