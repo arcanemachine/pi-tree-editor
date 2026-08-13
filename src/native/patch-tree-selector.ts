@@ -18,6 +18,7 @@ import type { SessionManagerAdapter } from "../surgery/replay.js";
 import {
   getActiveMode,
   getExtensionContext,
+  getHookStatus,
   selectorState,
   reportHookFailure,
   setHookStatus,
@@ -65,6 +66,10 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
   prototype.getTreeList = getList;
   patchSelectorRender(prototype);
   prototype.handleInput = function (this: SelectorLike, keyData: string): void {
+    if (!getHookStatus().enabled) {
+      originalHandleInput.call(this, keyData);
+      return;
+    }
     const state = selectorState(this);
     if (state.flowComponent) {
       state.flowComponent.handleInput(keyData);
@@ -193,6 +198,7 @@ function patchSelectorRender(prototype: SelectorLike): void {
   const originalRender = prototype.render ?? inherited?.render;
   if (typeof originalRender !== "function") return;
   prototype.render = function (this: SelectorLike, width: number): string[] {
+    if (!getHookStatus().enabled) return originalRender.call(this, width);
     patchSelectorHelp(this);
     return originalRender.call(this, width);
   };
@@ -227,6 +233,7 @@ function patchSelectorHelp(selector: SelectorLike): void {
   if (!help || typeof help.render !== "function") return;
   const originalRender = help.render as (width: number) => string[];
   help.render = function (this: object, width: number): string[] {
+    if (!getHookStatus().enabled) return originalRender.call(this, width);
     const native = originalRender.call(this, width);
     if (native.length === 0) return native;
     return [editorHelpLine(selectorState(selector), width), ...native.slice(1)];

@@ -76,10 +76,18 @@ function notifyHookFailure(): void {
   if (!context || !status.reason || status.enabled) return;
   if (notifiedFailureReason === status.reason) return;
   notifiedFailureReason = status.reason;
-  context.ui.notify(
-    `pi-tree-editor: native /tree editing unavailable — ${status.reason}. Use native /tree unchanged; run /tree-editor status for details.`,
-    "warning",
-  );
+  try {
+    context.ui.notify(
+      `pi-tree-editor: native /tree editing unavailable — ${status.reason}. Use native /tree unchanged; run /tree-editor status for details.`,
+      "warning",
+    );
+  } catch {
+    // Notification must never interfere with native /tree behavior.
+  }
+}
+
+export function notifyHookFailureIfNeeded(): void {
+  notifyHookFailure();
 }
 
 export function getHookStatus(): HookStatus {

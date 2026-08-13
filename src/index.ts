@@ -1,7 +1,14 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { registerTreeEditorCommand } from "./command.js";
 import { installNativeHooks } from "./native/internal-imports.js";
-import { clearSessionState, setExtensionContext } from "./native/patch-state.js";
+import {
+  clearSessionState,
+  notifyHookFailureIfNeeded,
+  setExtensionContext,
+} from "./native/patch-state.js";
 
 export default function piTreeEditor(pi: ExtensionAPI): void {
   registerTreeEditorCommand(pi);
@@ -9,7 +16,7 @@ export default function piTreeEditor(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     setExtensionContext(ctx);
-    void installNativeHooks();
+    void installNativeHooks().then(() => notifyHookFailureIfNeeded());
   });
   pi.on("session_shutdown", () => {
     clearSessionState();

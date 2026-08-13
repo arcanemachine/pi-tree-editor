@@ -21,15 +21,25 @@ type FakeModules = {
 function fakeModules(): FakeModules {
   const selectorCalls: string[] = [];
   const interactiveCalls: number[] = [];
+  class TreeHelp {
+    render(width: number): string[] {
+      return [`native help ${width}`, "native footer"];
+    }
+  }
   class TreeSelectorComponent {
+    children = [new TreeHelp()];
+
     handleInput(data: string): void {
       selectorCalls.push(data);
     }
     getTreeList(): object {
       return {};
     }
-    render(): string[] {
-      return [];
+    render(width: number): string[] {
+      return [
+        "native tree",
+        ...this.children.flatMap((child) => child.render(width)),
+      ];
     }
   }
   class InteractiveMode {
@@ -72,12 +82,26 @@ describe("native compatibility", () => {
 
   it("keeps native behavior when selector module import fails", async () => {
     const modules = fakeModules();
+    const originalSelectorHandle = (
+      modules.selectorModule.TreeSelectorComponent as any
+    ).prototype.handleInput;
+    const originalInteractiveShow = (
+      modules.interactiveModule.InteractiveMode as any
+    ).prototype.showTreeSelector;
     const warnings: string[] = [];
     const installed = await installNativeHooksForTest(async () => {
       throw new Error("tree selector import failed");
     });
 
     expect(installed).toBe(false);
+    expect(
+      (modules.selectorModule.TreeSelectorComponent as any).prototype
+        .handleInput,
+    ).toBe(originalSelectorHandle);
+    expect(
+      (modules.interactiveModule.InteractiveMode as any).prototype
+        .showTreeSelector,
+    ).toBe(originalInteractiveShow);
     expect(warnings).toHaveLength(0);
     setExtensionContext({
       ui: {
@@ -98,6 +122,9 @@ describe("native compatibility", () => {
 
   it("keeps native behavior when selector shape probing fails", () => {
     const modules = fakeModules();
+    const originalInteractiveShow = (
+      modules.interactiveModule.InteractiveMode as any
+    ).prototype.showTreeSelector;
     const warnings = captureWarnings();
     class IncompatibleSelector {
       handleInput(data: string): void {
@@ -111,6 +138,10 @@ describe("native compatibility", () => {
     );
 
     expect(installed).toBe(false);
+    expect(
+      (modules.interactiveModule.InteractiveMode as any).prototype
+        .showTreeSelector,
+    ).toBe(originalInteractiveShow);
     new IncompatibleSelector().handleInput("native");
     new (modules.interactiveModule.InteractiveMode as any)().showTreeSelector();
     expect(modules.selectorCalls).toEqual(["native"]);
@@ -121,6 +152,12 @@ describe("native compatibility", () => {
 
   it("rolls back selector patch when interactive patch installation fails", () => {
     const modules = fakeModules();
+    const originalSelectorHandle = (
+      modules.selectorModule.TreeSelectorComponent as any
+    ).prototype.handleInput;
+    const originalInteractiveShow = (
+      modules.interactiveModule.InteractiveMode as any
+    ).prototype.showTreeSelector;
     const warnings = captureWarnings();
     const interactivePrototype = (
       modules.interactiveModule.InteractiveMode as any
@@ -137,6 +174,14 @@ describe("native compatibility", () => {
     );
 
     expect(installed).toBe(false);
+    expect(
+      (modules.selectorModule.TreeSelectorComponent as any).prototype
+        .handleInput,
+    ).toBe(originalSelectorHandle);
+    expect(
+      (modules.interactiveModule.InteractiveMode as any).prototype
+        .showTreeSelector,
+    ).toBe(originalInteractiveShow);
     new (modules.selectorModule.TreeSelectorComponent as any)().handleInput(
       "native",
     );
@@ -145,5 +190,38 @@ describe("native compatibility", () => {
     expect(modules.interactiveCalls).toHaveLength(1);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("Native tree hooks unavailable");
+  });
+
+  it("bypasses selector augmentation after a runtime capability failure", () => {
+    const modules = fakeModules();
+    const warnings = captureWarnings();
+    const installed = installNativeHooksWithModulesForTest(
+      modules.selectorModule,
+      modules.interactiveModule,
+    );
+    expect(installed).toBe(true);
+
+    const selector = new (modules.selectorModule
+      .TreeSelectorComponent as any)();
+    const nativeHelp = selector.children[0].render(30);
+    const enabledLines = selector.render(30);
+    expect(
+      enabledLines.some((line: string) => line.includes("Tree editor")),
+    ).toBe(true);
+
+    const mode = new (modules.interactiveModule.InteractiveMode as any)();
+    mode.showTreeSelector.call({});
+    mode.showTreeSelector.call({});
+    selector.handleInput("native");
+    const disabledLines = selector.render(30);
+
+    expect(disabledLines).toEqual(["native tree", ...nativeHelp]);
+    expect(
+      disabledLines.some((line: string) => line.includes("Tree editor")),
+    ).toBe(false);
+    expect(modules.interactiveCalls).toHaveLength(2);
+    expect(modules.selectorCalls).toEqual(["native"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("native /tree editing unavailable");
   });
 });
