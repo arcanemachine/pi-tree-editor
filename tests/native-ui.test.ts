@@ -193,7 +193,7 @@ describe("native tree editor interaction", () => {
         },
       },
     } as never);
-    const width = 18;
+    const widths = [100, 48, 24, 18, 12, 4, 1];
     const createSelector = (Selector: typeof TreeSelectorComponent) =>
       new Selector(
         manager.getTree(),
@@ -204,8 +204,29 @@ describe("native tree editor interaction", () => {
       );
     const selector = createSelector(TreeSelectorComponent);
     const native = createSelector(NativeSelector);
-    const expectNativeHeight = () =>
-      expect(selector.render(width)).toHaveLength(native.render(width).length);
+    const helpOf = (candidate: typeof selector) =>
+      (
+        candidate.children as Array<{
+          constructor: { name?: string };
+          render(width: number): string[];
+        }>
+      ).find((child) => child.constructor.name === "TreeHelp")!;
+    const help = helpOf(selector);
+    const nativeHelp = helpOf(native);
+    const expectNativeHeight = () => {
+      for (const width of widths) {
+        const rendered = selector.render(width);
+        const nativeRendered = native.render(width);
+        const replacementRows = help.render(width);
+        const nativeHelpRows = nativeHelp.render(width);
+        expect(rendered).toHaveLength(nativeRendered.length);
+        expect(replacementRows).toHaveLength(nativeHelpRows.length);
+        expect(
+          replacementRows.every((line: string) => visibleWidth(line) <= width),
+          `replacement overflow at width ${width}`,
+        ).toBe(true);
+      }
+    };
 
     expectNativeHeight();
     expect(selector.render(100).join("\n")).toContain(
