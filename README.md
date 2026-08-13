@@ -4,83 +4,80 @@
   <img src="https://raw.githubusercontent.com/arcanemachine/pi-tree-editor/main/logo.jpg" alt="pi-tree-editor logo" width="250" />
 </p>
 
-Safely edit Pi conversation history through the native `/tree` selector.
+Safely edit Pi conversation history from the native `/tree` selector. Stage edits, review a compact confirmation menu, and apply them as a new conversation branch without changing files or other external state.
 
-> Conversation surgery preserves the original session branch and changes conversation context only. It does not restore files, Git state, tool side effects, or other external state.
+## Installation and compatibility
 
-## Compatibility
-
-- Tested against Pi 0.84.1
-- Future Pi versions are accepted when the required native capabilities match; incompatible hooks fail closed and leave native `/tree` available
-- Node.js 22.19.0 or later for package development
-
-## Installation
-
-### From GitHub
+Install from GitHub:
 
 ```bash
 pi install git:github.com/arcanemachine/pi-tree-editor
 ```
 
-### From npm
-
-```bash
-pi install npm:@arcanemachine/pi-tree-editor
-```
-
-### From a local clone
+Or install a local clone:
 
 ```bash
 pi install /path/to/pi-tree-editor
 ```
 
-For local development, load the source entrypoint directly:
+For development, load the source entrypoint directly:
 
 ```bash
 pi -e /path/to/pi-tree-editor/src/index.ts
 ```
 
-## Native `/tree` editor
+Tested against Pi 0.84.1. Compatible future Pi versions must provide the required native `/tree` capabilities. Node.js 22.19.0 or later is required for package development.
 
-Open Pi's native tree with `/tree`, then press `Tab` to enter edit mode. The selector keeps its native navigation, search, folding, filtering, labels, and copy behavior.
+## Use `/tree`
 
-Edit mode shows its key help persistently:
+Open `/tree`, then press `Tab` to enter tree-editor mode. Native tree navigation, search, filtering, folding, labels, and copy behavior remain available.
 
 ```text
-s save staged edits · e edit · d remove · a after · Shift+A before · u undo
+s save · e edit · d remove · a after · Shift+A before · u undo
 Escape exits directly when unchanged, or opens Cancel / Yes / No when staged
 ```
 
-### Editing controls
+- `e` edits a supported text block inline.
+- `d` stages or unstages removal of a logical unit.
+- `a` inserts a visible context note after the selected unit.
+- `Shift+A` inserts a visible context note before the selected unit.
+- `u` undoes the latest staged operation.
+- `s` opens a save menu showing the staged item count. `Yes` applies (default); `Cancel` keeps editing.
+- `Escape` cancels inline input. With no staged changes it exits `/tree`; with staged changes it opens `Cancel / Yes / No` (default `Cancel`): `Cancel` keeps editing, `Yes` applies, and `No` discards and exits.
 
-- `e` — edit a supported text block inline.
-- `d` — stage or unstage removal of a logical unit.
-- `a` — insert a visible context note after the selected unit.
-- `Shift+A` — insert a visible context note before the selected unit.
-- `u` — undo the latest staged operation.
-- `s` — open the in-tree save menu showing the staged item count; `Yes` applies, and `Cancel` keeps editing with staged changes.
-- `Escape` — cancel inline input; with no staged changes, exit `/tree` directly. With staged changes, open `Cancel / Yes / No`: `Cancel` keeps editing, `Yes` applies, and `No` discards and exits.
+Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter, or Escape for Cancel. Planning or apply failures leave staged work available for correction or retry.
 
-Command keys are shown lowercase; uppercase aliases remain accepted.
+### Multiline input
 
-Inline input uses `Enter` to stage a change and `Escape` to cancel the input. Confirmation menus are selector-local: use Up/Down and Enter, or Escape for Cancel. Save defaults to `Yes`; exit defaults to `Cancel`. Planning failures leave staged changes intact. No key silently applies or discards staged work.
+Editing a prefill containing CR or LF uses Pi's native multiline `Editor`, so physical terminal rows remain stable and bounded. Plain `Enter` stages the text exactly; `Escape` cancels. Use `Shift+Enter` or `Ctrl+J` for a newline. Unchanged prefills preserve their exact whitespace and newline form, including CRLF and CR-only text; changed text uses the current editor value.
 
-Use `/tree-editor status` to inspect hook availability and actionable compatibility failures.
+### What can be edited
 
-## Safety and semantics
+`e` edits supported text blocks in user, assistant, custom-message, compaction, and branch-summary entries. Tool results and assistant tool-call exchanges are protected from internal edits. `d` operates on logical units, so a tool call and all of its results are removed together. Unsupported structural entries cannot be edited; removal plans that violate structural boundaries fail validation.
 
-All edits use append-only, same-session copy-on-write reconstruction:
+## Safety model
+
+Edits use append-only, same-session, copy-on-write reconstruction:
 
 - Existing entries and the original branch are never modified or deleted.
-- The corrected conversation becomes a new alternate branch with fresh entry IDs.
-- Assistant tool calls and all corresponding results are indivisible.
-- Provider reasoning/thinking blocks, images, and opaque blocks are preserved.
-- Compaction references are validated before applying changes.
+- Only the affected suffix is reconstructed; the unchanged prefix is retained.
+- The reconstructed suffix receives fresh entry IDs on a new alternate branch; the unchanged prefix is retained.
+- Reasoning/thinking blocks, images, provider metadata, opaque blocks, and compaction references are preserved and validated.
 - A non-context audit entry records the reconstruction.
-- Caught failures return to the original branch and leave partial alternate entries unreachable.
-- Persistence is incremental and therefore not crash-atomic during an in-progress reconstruction.
+- Failures return to the original branch; partial alternate entries remain unreachable.
+- Persistence is incremental, so an in-progress reconstruction is not crash-atomic.
 
-V1 does not edit tool arguments/results or reasoning blocks, rewrite JSONL, rewind filesystem state, or generate summaries with an LLM.
+This extension does not restore files or Git state, edit tool arguments/results or reasoning blocks, rewrite JSONL, or call an LLM to summarize content.
+
+## Graceful fallback
+
+If native capabilities are missing or a hook cannot be installed, pi-tree-editor warns once and leaves Pi's native `/tree` behavior available unchanged. Runtime capability failures disable the editor augmentation while continuing to call native `/tree`. Run:
+
+```text
+/tree-editor status
+```
+
+to inspect hook availability and compatibility details.
 
 ## Development
 
@@ -93,7 +90,7 @@ npm run build
 npm pack --dry-run
 ```
 
-`npm run format:check` verifies formatting without changing files. Use `npm run format` only for deliberate package-wide normalization. Automated tests use in-memory or isolated session fixtures.
+Tests use in-memory or isolated session fixtures.
 
 ## License
 
