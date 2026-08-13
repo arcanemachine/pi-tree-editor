@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/arcanemachine/pi-tree-editor/main/logo.jpg" alt="pi-tree-editor logo" width="250" />
 </p>
 
-Safely edit Pi conversation history from the native `/tree` selector. Stage edits, review a compact confirmation menu, and apply them as a new conversation branch without changing files or other external state.
+Safely edit Pi conversation history from the native `/tree` selector. Stage edits, confirm them in a compact save menu, and apply them as a new conversation branch without changing files or other external state.
 
 ## Installation and compatibility
 
@@ -61,7 +61,7 @@ Edits use append-only, same-session, copy-on-write reconstruction:
 
 - Existing entries and the original branch are never modified or deleted.
 - Only the affected suffix is reconstructed; the unchanged prefix is retained.
-- The reconstructed suffix receives fresh entry IDs on a new alternate branch; the unchanged prefix is retained.
+- The reconstructed suffix receives fresh entry IDs on a new alternate branch.
 - Reasoning/thinking blocks, images, provider metadata, opaque blocks, and compaction references are preserved and validated.
 - A non-context audit entry records the reconstruction.
 - Failures return to the original branch; partial alternate entries remain unreachable.
