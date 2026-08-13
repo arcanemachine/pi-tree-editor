@@ -15,7 +15,6 @@ import {
 import * as PiTui from "@earendil-works/pi-tui";
 import type { SessionEntryLike } from "../surgery/types.js";
 import type { SessionManagerAdapter } from "../surgery/replay.js";
-import { auditPreview } from "../audit.js";
 import {
   getActiveMode,
   getExtensionContext,
@@ -109,7 +108,13 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
     const list = this.getTreeList?.() as TreeListLike | undefined;
     const selected = list?.getSelectedNode?.();
     if (keyData === "\u001b") {
-      showExitConfirmation(this, state, list);
+      if (state.operations.length === 0) {
+        state.editMode = false;
+        state.snapshot = undefined;
+        list?.onCancel?.();
+      } else {
+        showExitConfirmation(this, state, list);
+      }
       return;
     }
     if (keyData === "u" || keyData === "U") {
@@ -156,7 +161,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
     if (keyData === "\r" || keyData === "\n") {
       getExtensionContext()?.ui.notify(
         state.operations.length > 0
-          ? "Use Ctrl+Enter to preview and apply staged tree edits"
+          ? "Use S to save staged tree edits"
           : "No staged tree edits",
         "info",
       );
@@ -238,9 +243,9 @@ function editorHelpLine(
   const line = state.inlineInput
     ? "Tree editor input: Enter stage change · Escape cancel input"
     : state.flow === "save-review"
-      ? "Tree editor review: A apply · B/Escape back to editing"
+      ? "Tree editor save: Yes apply · Cancel keep staged"
       : state.flow === "exit-confirm"
-        ? "Exit tree: D discard and exit · K/Escape keep editing"
+        ? "Exit tree: Cancel keep editing · Yes apply · No discard"
         : state.editMode
           ? "Tree editor ON: S save · E edit · D remove · A/Shift+A insert · U undo"
           : "Tree editor: Tab edit mode · Escape exit /tree";
@@ -444,6 +449,104 @@ function showFlowComponent(
   labelInputContainer.addChild(container);
 }
 
+type ChoiceItem = { value: string; label: string };
+
+type ChoiceFlow = "save-review" | "exit-confirm";
+
+const choiceTheme = {
+  selectedPrefix: (text: string) => text,
+  selectedText: (text: string) => text,
+  description: (text: string) => text,
+  scrollInfo: (text: string) => text,
+  noMatch: (text: string) => text,
+};
+
+function showChoiceMenu(
+  selector: SelectorLike,
+  state: ReturnType<typeof selectorState>,
+  list: TreeListLike | undefined,
+  flow: ChoiceFlow,
+  heading: string,
+  items: ChoiceItem[],
+  defaultIndex: number,
+  onSelect: (value: string) => void,
+  onCancel: () => void,
+): boolean {
+  const labelInputContainer = selector.labelInputContainer as
+    | { clear(): void; addChild(child: unknown): void }
+    | undefined;
+  const treeContainer = selector.treeContainer as
+    | { clear(): void; addChild(child: unknown): void }
+    | undefined;
+  const SelectListComponent = (
+    PiTui as unknown as {
+      SelectList?: new (
+        items: ChoiceItem[],
+        maxVisible: number,
+        theme: typeof choiceTheme,
+      ) => {
+        onSelect?: (item: ChoiceItem) => void;
+        onCancel?: () => void;
+        setSelectedIndex(index: number): void;
+        handleInput(data: string): void;
+        render(width: number): string[];
+        invalidate?(): void;
+      };
+    }
+  ).SelectList;
+  const listForMenu = list;
+  if (!labelInputContainer || !treeContainer || !listForMenu) return false;
+  if (typeof SelectListComponent !== "function") {
+    getExtensionContext()?.ui.notify(
+      "Tree editor confirmation menus are unavailable in this Pi build",
+      "warning",
+    );
+    return false;
+  }
+
+  const headingText = new Text(heading, 0, 0);
+  const select = new SelectListComponent(items, items.length, choiceTheme);
+  select.setSelectedIndex(defaultIndex);
+  const menu = {
+    render(width: number): string[] {
+      return [...headingText.render(width), ...select.render(width)].map(
+        (line) => truncateToWidth(line, Math.max(1, width), ""),
+      );
+    },
+    invalidate(): void {
+      headingText.invalidate();
+      select.invalidate?.();
+    },
+  };
+  const finish = () => {
+    state.flow = undefined;
+    state.flowComponent = undefined;
+    state.confirmingExit = false;
+    labelInputContainer.clear();
+    treeContainer.clear();
+    treeContainer.addChild(listForMenu);
+  };
+  const cancel = () => {
+    finish();
+    onCancel();
+  };
+  select.onSelect = (item) => {
+    finish();
+    onSelect(item.value);
+  };
+  select.onCancel = cancel;
+  state.flow = flow;
+  state.flowComponent = {
+    handleInput: (data) => select.handleInput(data),
+    finish,
+    cancel,
+  };
+  treeContainer.clear();
+  labelInputContainer.clear();
+  labelInputContainer.addChild(menu);
+  return true;
+}
+
 function showExitConfirmation(
   selector: SelectorLike,
   state: ReturnType<typeof selectorState>,
@@ -452,34 +555,34 @@ function showExitConfirmation(
   const ctx = getExtensionContext();
   if (!ctx) return;
   state.confirmingExit = true;
-  state.flow = "exit-confirm";
-  showFlowComponent(
+  const shown = showChoiceMenu(
     selector,
     state,
+    list,
+    "exit-confirm",
+    `Exit tree with ${state.operations.length} staged item${state.operations.length === 1 ? "" : "s"}?`,
     [
-      "Exit tree without saving changes?",
-      `You have ${state.operations.length} staged change${state.operations.length === 1 ? "" : "s"}.`,
-      "D discard changes and exit · K keep editing · Escape keep editing",
+      { value: "cancel", label: "Cancel" },
+      { value: "yes", label: "Yes" },
+      { value: "no", label: "No" },
     ],
-    (data) => {
-      if (data === "d" || data === "D") {
+    0,
+    (value) => {
+      if (value === "yes") {
+        void previewAndApply(selector, state, list, true);
+      } else if (value === "no") {
         state.operations = [];
         state.snapshot = undefined;
         state.editMode = false;
-        state.flowComponent?.finish();
         list?.onCancel?.();
         ctx.ui.notify("Staged changes discarded", "info");
-      } else if (data === "k" || data === "K" || data === "\u001b") {
-        state.flowComponent?.cancel();
-        ctx.ui.notify(
-          "Kept editing; staged changes were not discarded",
-          "info",
-        );
       }
     },
-    () => undefined,
-    () => undefined,
+    () => {
+      ctx.ui.notify("Kept editing; staged changes were not discarded", "info");
+    },
   );
+  if (!shown) state.confirmingExit = false;
 }
 
 function showSaveReview(
@@ -489,16 +592,13 @@ function showSaveReview(
 ): void {
   const ctx = getExtensionContext();
   if (!ctx || !state.snapshot) return;
-  let preview: string[];
   try {
-    preview = auditPreview(
-      planSurgery({
-        entries: state.snapshot.entries,
-        leafId: state.snapshot.leafId,
-        sessionId: state.snapshot.sessionId,
-        operations: state.operations,
-      }),
-    );
+    planSurgery({
+      entries: state.snapshot.entries,
+      leafId: state.snapshot.leafId,
+      sessionId: state.snapshot.sessionId,
+      operations: state.operations,
+    });
   } catch (error) {
     ctx.ui.notify(
       error instanceof Error ? error.message : String(error),
@@ -506,26 +606,25 @@ function showSaveReview(
     );
     return;
   }
-  state.flow = "save-review";
-  showFlowComponent(
+  showChoiceMenu(
     selector,
     state,
+    list,
+    "save-review",
+    `Save ${state.operations.length} staged item${state.operations.length === 1 ? "" : "s"}?`,
     [
-      "Review and save tree edits",
-      ...preview,
-      "A apply changes · B back to editing · Escape back to editing",
+      { value: "yes", label: "Yes" },
+      { value: "cancel", label: "Cancel" },
     ],
-    (data) => {
-      if (data === "a" || data === "A") {
-        state.flowComponent?.finish();
+    0,
+    (value) => {
+      if (value === "yes") {
         void previewAndApply(selector, state, list, true);
-      } else if (data === "b" || data === "B" || data === "\u001b") {
-        state.flowComponent?.cancel();
-        ctx.ui.notify("Returned to tree editing", "info");
       }
     },
-    () => undefined,
-    () => undefined,
+    () => {
+      ctx.ui.notify("Save canceled; staged changes were kept", "info");
+    },
   );
 }
 

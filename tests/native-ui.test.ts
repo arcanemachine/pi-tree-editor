@@ -69,13 +69,19 @@ describe("native tree editor interaction", () => {
 
     selector.handleInput("s");
     expect(selectorState(selector).flow).toBe("save-review");
-    expect(selector.render(100).join("\n")).toContain("review: A apply");
+    expect(selector.render(100).join("\n")).toContain(
+      "Tree editor save: Yes apply · Cancel keep staged",
+    );
+    expect(selector.render(100).join("\n")).toContain("Save 1 staged item?");
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBeUndefined();
     expect(selectorState(selector).operations).toHaveLength(1);
 
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBe("exit-confirm");
+    expect(selector.render(100).join("\n")).toContain("→ Cancel");
+    expect(selector.render(100).join("\n")).toContain("Yes");
+    expect(selector.render(100).join("\n")).toContain("No");
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBeUndefined();
     expect(selectorState(selector).operations).toHaveLength(1);
@@ -122,7 +128,7 @@ describe("native tree editor interaction", () => {
     ).toBe(true);
   });
 
-  it("requires an explicit discard choice to exit with no staged changes", async () => {
+  it("exits directly with no staged changes", async () => {
     const treeSelectorUrl = new URL(
       "./modes/interactive/components/tree-selector.js",
       await import.meta.resolve("@earendil-works/pi-coding-agent"),
@@ -152,15 +158,144 @@ describe("native tree editor interaction", () => {
     selector.handleInput("\t");
     expect(selector.render(100).join("\n")).toContain("Tree editor ON");
     selector.handleInput("\u001b");
-    expect(selectorState(selector).flow).toBe("exit-confirm");
-    selector.handleInput("k");
     expect(selectorState(selector).flow).toBeUndefined();
-    expect(selectorState(selector).editMode).toBe(true);
-    expect(exited).toBe(false);
-    selector.handleInput("\u001b");
-    expect(selectorState(selector).flow).toBe("exit-confirm");
-    selector.handleInput("d");
+    expect(selectorState(selector).editMode).toBe(false);
     expect(exited).toBe(true);
+  });
+
+  it("navigates confirmation menus and preserves staged work", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory("/tmp/pi-tree-editor-menu-test");
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: manager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    setExtensionContext({
+      hasUI: true,
+      isIdle: () => true,
+      ui: { notify: () => undefined },
+    } as never);
+    let exited = false;
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => {
+        exited = true;
+      },
+    );
+    selector.handleInput("\t");
+    selector.handleInput("a");
+    selector.handleInput("n");
+    selector.handleInput("o");
+    selector.handleInput("t");
+    selector.handleInput("e");
+    selector.handleInput("\r");
+    selector.handleInput("s");
+    expect(selector.render(48).join("\n")).toContain("→ Yes");
+    selector.handleInput("\u001b[B");
+    expect(selector.render(48).join("\n")).toContain("→ Cancel");
+    selector.handleInput("\r");
+    expect(selectorState(selector).flow).toBeUndefined();
+    expect(selectorState(selector).operations).toHaveLength(1);
+    expect(exited).toBe(false);
+
+    selector.handleInput("s");
+    selector.handleInput("\r");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(selectorState(selector).editMode).toBe(false);
+
+    const exitManager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-menu-exit-test",
+    );
+    const exitLeafId = exitManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: exitManager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    let exitDiscarded = false;
+    const exitSelector = new TreeSelectorComponent(
+      exitManager.getTree(),
+      exitLeafId,
+      30,
+      () => undefined,
+      () => {
+        exitDiscarded = true;
+      },
+    );
+    exitSelector.handleInput("\t");
+    exitSelector.handleInput("a");
+    exitSelector.handleInput("x");
+    exitSelector.handleInput("\r");
+    exitSelector.handleInput("\u001b");
+    expect(selectorState(exitSelector).flow).toBe("exit-confirm");
+    exitSelector.handleInput("\u001b[B");
+    exitSelector.handleInput("\u001b[B");
+    expect(exitSelector.render(48).join("\n")).toContain("→ No");
+    exitSelector.handleInput("\r");
+    expect(selectorState(exitSelector).operations).toHaveLength(0);
+    expect(selectorState(exitSelector).editMode).toBe(false);
+    expect(exitDiscarded).toBe(true);
+  });
+
+  it("keeps staged operations when save planning fails", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-menu-planning-failure-test",
+    );
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    setActiveMode({ sessionManager: manager } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    selector.handleInput("a");
+    selector.handleInput("x");
+    selector.handleInput("\r");
+    const state = selectorState(selector);
+    state.operations.push({
+      kind: "edit-text",
+      entryId: "missing-entry",
+      blockIndex: 0,
+      text: "invalid",
+    });
+    selector.handleInput("s");
+    expect(state.flow).toBeUndefined();
+    expect(state.operations).toHaveLength(2);
+    expect(state.editMode).toBe(true);
   });
 
   it("keeps native selector height while editor states replace its content", async () => {
@@ -250,7 +385,7 @@ describe("native tree editor interaction", () => {
     selector.handleInput("\r");
     selector.handleInput("s");
     expect(selectorState(selector).flow).toBe("save-review");
-    expect(selector.render(100).join("\n")).toContain("Tree editor review");
+    expect(selector.render(100).join("\n")).toContain("Tree editor save");
     native.treeContainer.clear();
     native.labelInputContainer.clear();
     native.treeContainer.addChild(selector.labelInputContainer.children[0]);
@@ -259,7 +394,9 @@ describe("native tree editor interaction", () => {
     selector.handleInput("\u001b");
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBe("exit-confirm");
-    expect(selector.render(100).join("\n")).toContain("Exit tree: D discard");
+    expect(selector.render(100).join("\n")).toContain(
+      "Exit tree: Cancel keep editing",
+    );
     native.treeContainer.clear();
     native.labelInputContainer.clear();
     native.treeContainer.addChild(selector.labelInputContainer.children[0]);
