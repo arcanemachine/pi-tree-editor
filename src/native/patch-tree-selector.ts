@@ -11,6 +11,7 @@ import {
   Container,
   getKeybindings,
   Input,
+  matchesKey,
   Text,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
@@ -43,6 +44,8 @@ type TreeListLike = {
   getSelectedNode?: () => { entry: SessionEntryLike } | undefined;
   getEntryDisplayText?: (node: unknown, isSelected: boolean) => string;
   render?: (width: number) => string[];
+  applyFilter?: () => void;
+  onSelect?: (entryId: string) => void;
   onCancel?: () => void;
   [key: string | symbol]: unknown;
 };
@@ -54,6 +57,26 @@ type DisplayTheme = {
 const TREE_LIST_DISPLAY_PATCHED = Symbol.for(
   "arcanemachine.pi-tree-editor.tree-list-display-patched",
 );
+const TREE_LIST_VIRTUAL_ROWS_PATCHED = Symbol.for(
+  "arcanemachine.pi-tree-editor.tree-list-virtual-rows-patched",
+);
+const VIRTUAL_ROW = Symbol.for("arcanemachine.pi-tree-editor.virtual-row");
+
+type VirtualRowMeta = {
+  anchorUnitId: string;
+  position: "before" | "after";
+  role: "user" | "assistant" | "context";
+  operation: Extract<
+    ReturnType<typeof selectorState>["operations"][number],
+    { kind: "insert" }
+  >;
+};
+
+type VirtualNode = {
+  entry: SessionEntryLike;
+  children: [];
+  [VIRTUAL_ROW]?: VirtualRowMeta;
+};
 
 export function patchTreeSelector(
   module: Record<string, unknown>,
@@ -103,7 +126,7 @@ export function patchTreeSelector(
       const ctx = getExtensionContext();
       if (state.editMode && state.operations.length > 0) {
         ctx?.ui.notify(
-          "Save with s or discard with Escape before leaving edit mode",
+          "Save with ctrl+s or discard with Escape before leaving edit mode",
           "info",
         );
         return;
@@ -111,19 +134,32 @@ export function patchTreeSelector(
       state.editMode = !state.editMode;
       ctx?.ui.notify(
         state.editMode
-          ? "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u unstage"
+          ? "Tree editor mode: ctrl+s save, e edit, d remove, a insert, u unstage"
           : "Tree editor mode off",
         "info",
       );
       return;
     }
+    const list = this.getTreeList?.() as TreeListLike | undefined;
+    if (list)
+      refreshVirtualRows(list, selectorState(this), getDisplayTheme(theme));
+    const selected = list?.getSelectedNode?.();
     if (!state.editMode) {
+      if (
+        selected &&
+        isVirtualNode(selected) &&
+        getKeybindings().matches(keyData, "tui.select.confirm")
+      ) {
+        getExtensionContext()?.ui.notify(
+          "Staged rows are not navigable until you apply the tree edits",
+          "info",
+        );
+        return;
+      }
       originalHandleInput.call(this, keyData);
       return;
     }
     if (state.busy) return;
-    const list = this.getTreeList?.() as TreeListLike | undefined;
-    const selected = list?.getSelectedNode?.();
     if (keyData === "\u001b") {
       if (state.operations.length === 0) {
         state.editMode = false;
@@ -134,21 +170,40 @@ export function patchTreeSelector(
       }
       return;
     }
+    const virtual = selected && isVirtualNode(selected);
     if (keyData === "u" || keyData === "U") {
       if (!selected) return;
-      unstageSelected(state, selected.entry.id);
+      if (virtual) {
+        unstageVirtualRow(state, virtual);
+      } else {
+        unstageSelected(state, selected.entry.id);
+      }
       return;
     }
     if (keyData === "d" || keyData === "D") {
       if (!selected) return;
+      if (virtual) {
+        getExtensionContext()?.ui.notify(
+          "Removal is unavailable for a staged inserted row; use u to unstage it",
+          "warning",
+        );
+        return;
+      }
       if (!isActivePathEntry(selected.entry.id)) return;
       toggleRemoval(state, selected.entry.id);
       return;
     }
     if (keyData === "a" || keyData === "A") {
       if (!selected) return;
+      if (virtual) {
+        getExtensionContext()?.ui.notify(
+          "Insert actions apply to source tree units, not staged rows",
+          "warning",
+        );
+        return;
+      }
       if (!isActivePathEntry(selected.entry.id)) return;
-      void insertNote(
+      void beginInsertRole(
         this,
         state,
         selected.entry.id,
@@ -159,11 +214,15 @@ export function patchTreeSelector(
     }
     if (keyData === "e" || keyData === "E") {
       if (!selected) return;
+      if (virtual) {
+        editVirtualRow(this, state, virtual, list);
+        return;
+      }
       if (!isActivePathEntry(selected.entry.id)) return;
       void editEntry(this, state, selected.entry, list);
       return;
     }
-    if (keyData === "s" || keyData === "S") {
+    if (isCtrlS(keyData) || (keyData === "s" && hasLegacyInsert(state))) {
       if (state.operations.length === 0) {
         getExtensionContext()?.ui.notify(
           "No staged tree edits to save",
@@ -177,25 +236,13 @@ export function patchTreeSelector(
     if (keyData === "\r" || keyData === "\n") {
       getExtensionContext()?.ui.notify(
         state.operations.length > 0
-          ? "Use s to save staged tree edits"
+          ? "Use ctrl+s to save staged tree edits"
           : "No staged tree edits",
         "info",
       );
       return;
     }
-    if (
-      keyData.includes("13;5u") ||
-      keyData.includes("27;5;13") ||
-      keyData.includes("13;5~")
-    ) {
-      if (state.operations.length === 0) {
-        getExtensionContext()?.ui.notify("No staged tree edits", "info");
-        return;
-      }
-      showSaveReview(this, state, list);
-      return;
-    }
-    // Keep navigation, filtering, folding, copying, and label editing native.
+    // Keep navigation, filtering, folding, copying, label editing, and plain s native.
     originalHandleInput.call(this, keyData);
   };
   prototype[PATCHED] = true;
@@ -216,7 +263,10 @@ function patchSelectorRender(
   prototype.render = function (this: SelectorLike, width: number): string[] {
     if (!getHookStatus().enabled) return originalRender.call(this, width);
     patchSelectorHelp(this);
-    patchTreeListDisplay(this, selectorState(this), theme);
+    const state = selectorState(this);
+    const list = this.getTreeList?.() as TreeListLike | undefined;
+    if (list) refreshVirtualRows(list, state, theme);
+    patchTreeListDisplay(this, state, theme);
     return originalRender.call(this, width);
   };
   prototype[SELECTOR_RENDER_PATCHED] = true;
@@ -240,7 +290,9 @@ function patchTreeListDisplay(
     return;
   }
   const list = selector.getTreeList?.() as TreeListLike | undefined;
-  if (!list || list[TREE_LIST_DISPLAY_PATCHED]) return;
+  if (!list) return;
+  patchVirtualRows(list, state, theme);
+  if (list[TREE_LIST_DISPLAY_PATCHED]) return;
   const original = list.getEntryDisplayText;
   if (typeof original !== "function") return;
   list.getEntryDisplayText = function (
@@ -249,6 +301,10 @@ function patchTreeListDisplay(
     isSelected: boolean,
   ): string {
     if (!getHookStatus().enabled) return original.call(this, node, isSelected);
+    const virtual = getVirtualMeta(node);
+    if (virtual) {
+      return virtualRowDisplay(virtual, theme, isSelected);
+    }
     const entry = getDisplayEntry(node);
     if (!entry) return original.call(this, node, isSelected);
     try {
@@ -279,6 +335,244 @@ function getDisplayEntry(node: unknown): SessionEntryLike | undefined {
   return entry && typeof entry === "object"
     ? (entry as SessionEntryLike)
     : undefined;
+}
+
+function getVirtualMeta(node: unknown): VirtualRowMeta | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  const direct = (node as { [VIRTUAL_ROW]?: VirtualRowMeta })[VIRTUAL_ROW];
+  if (direct) return direct;
+  const nested = (node as { entry?: { [VIRTUAL_ROW]?: VirtualRowMeta } }).entry;
+  return nested?.[VIRTUAL_ROW];
+}
+
+function virtualRowDisplay(
+  meta: VirtualRowMeta,
+  theme: DisplayTheme,
+  isSelected: boolean,
+): string {
+  const roleLabel =
+    meta.role === "context"
+      ? "context"
+      : meta.role === "assistant"
+        ? "assistant"
+        : "user";
+  const color =
+    meta.role === "assistant"
+      ? "success"
+      : meta.role === "context"
+        ? "customMessageLabel"
+        : "accent";
+  const preview = meta.operation.text.replace(/[\t\r\n]+/g, " ").trim();
+  const bounded = preview.length > 200 ? `${preview.slice(0, 199)}…` : preview;
+  return `${theme.fg(color, `[insert ${roleLabel}]`)} ${bounded || "(empty)"}`;
+}
+
+type VirtualRowsState = {
+  baseFlatNodes: unknown[];
+  applyFilter: () => void;
+  fingerprint?: string;
+};
+
+function patchVirtualRows(
+  list: TreeListLike,
+  state: ReturnType<typeof selectorState>,
+  _theme?: DisplayTheme,
+): void {
+  let info = list[TREE_LIST_VIRTUAL_ROWS_PATCHED] as
+    | VirtualRowsState
+    | undefined;
+  if (!info) {
+    const flatNodes = list.flatNodes;
+    const applyFilter = list.applyFilter;
+    if (!Array.isArray(flatNodes) || typeof applyFilter !== "function") return;
+    info = {
+      baseFlatNodes: flatNodes.map((flatNode) => {
+        if (!flatNode || typeof flatNode !== "object") return flatNode;
+        const source = flatNode as Record<string, unknown>;
+        const node = source.node;
+        return {
+          ...source,
+          node:
+            node && typeof node === "object"
+              ? { ...(node as Record<string, unknown>) }
+              : node,
+        };
+      }),
+      applyFilter: applyFilter.bind(list),
+    };
+    list[TREE_LIST_VIRTUAL_ROWS_PATCHED] = info;
+  }
+  refreshVirtualRows(list, state, _theme);
+}
+
+function refreshVirtualRows(
+  list: TreeListLike,
+  state: ReturnType<typeof selectorState>,
+  theme?: DisplayTheme,
+): void {
+  if (!list[TREE_LIST_VIRTUAL_ROWS_PATCHED]) {
+    patchVirtualRows(list, state, theme);
+    return;
+  }
+  const info = list[TREE_LIST_VIRTUAL_ROWS_PATCHED] as VirtualRowsState;
+  const inserts = state.operations.filter(
+    (operation): operation is Extract<typeof operation, { kind: "insert" }> =>
+      operation.kind === "insert",
+  );
+  const fingerprint = JSON.stringify(
+    inserts.map((operation) => ({
+      anchorUnitId: operation.anchorUnitId,
+      position: operation.position,
+      role: operation.role,
+      text: operation.text,
+    })),
+  );
+  if (info.fingerprint === fingerprint) return;
+  const base = info.baseFlatNodes;
+  const before = new Map<number, unknown[]>();
+  const after = new Map<number, unknown[]>();
+  const manager = getManager();
+  const path = manager
+    ? activePath(manager.getEntries(), manager.getLeafId())
+    : [];
+  const units = buildLogicalUnits(path).units;
+  const unitById = new Map(units.map((unit) => [unit.id, unit]));
+  for (const operation of inserts) {
+    const unit = unitById.get(operation.anchorUnitId);
+    const boundaryId =
+      operation.position === "before"
+        ? unit?.entries[0]?.id
+        : unit?.entries.at(-1)?.id;
+    const anchorId = boundaryId ?? operation.anchorUnitId;
+    const index = base.findIndex((flatNode) => {
+      if (!flatNode || typeof flatNode !== "object") return false;
+      const node = (flatNode as { node?: { entry?: { id?: string } } }).node;
+      return node?.entry?.id === anchorId;
+    });
+    if (index < 0) continue;
+    const source = base[index] as {
+      node?: { entry?: SessionEntryLike };
+    };
+    const parentId = source.node?.entry?.parentId ?? null;
+    const virtual = createVirtualNode(operation, parentId);
+    const target = operation.position === "before" ? before : after;
+    const rows = target.get(index) ?? [];
+    rows.push({
+      node: virtual,
+      indent: 0,
+      showConnector: false,
+      isLast: true,
+      gutters: [],
+      isVirtualRootChild: false,
+    });
+    target.set(index, rows);
+  }
+  const next: unknown[] = [];
+  for (let index = 0; index < base.length; index += 1) {
+    next.push(...(before.get(index) ?? []), base[index]);
+    next.push(...(after.get(index) ?? []));
+  }
+  list.flatNodes = next;
+  info.fingerprint = fingerprint;
+  info.applyFilter();
+}
+
+function createVirtualNode(
+  operation: Extract<
+    ReturnType<typeof selectorState>["operations"][number],
+    { kind: "insert" }
+  >,
+  parentId: string | null,
+): VirtualNode {
+  const id = `pi-tree-editor:insert:${operation.role}:${operation.anchorUnitId}:${operation.position}`;
+  const entry: SessionEntryLike =
+    operation.role === "context"
+      ? {
+          type: "custom_message",
+          id,
+          parentId,
+          timestamp: "virtual",
+          customType: "context",
+          content: operation.text,
+          display: true,
+        }
+      : {
+          type: "message",
+          id,
+          parentId,
+          timestamp: "virtual",
+          message: { role: operation.role, content: operation.text },
+        };
+  const node = { entry, children: [] as [] } as VirtualNode;
+  node[VIRTUAL_ROW] = {
+    anchorUnitId: operation.anchorUnitId,
+    position: operation.position,
+    role: operation.role,
+    operation,
+  };
+  return node;
+}
+
+function isVirtualNode(node: unknown): VirtualRowMeta | undefined {
+  return getVirtualMeta(node);
+}
+
+function unstageVirtualRow(
+  state: ReturnType<typeof selectorState>,
+  virtual: VirtualRowMeta,
+): void {
+  state.operations = state.operations.filter(
+    (operation) =>
+      !(
+        operation.kind === "insert" &&
+        operation.anchorUnitId === virtual.anchorUnitId &&
+        operation.position === virtual.position
+      ),
+  );
+  if (state.operations.length === 0) state.snapshot = undefined;
+  getExtensionContext()?.ui.notify("Staged insertion unstaged", "info");
+}
+
+function editVirtualRow(
+  selector: SelectorLike,
+  state: ReturnType<typeof selectorState>,
+  virtual: VirtualRowMeta,
+  list: TreeListLike | undefined,
+): void {
+  const ctx = getExtensionContext();
+  if (!ctx?.hasUI) return;
+  startInlineEdit(
+    selector,
+    state,
+    virtual.operation.text,
+    (text) => {
+      if (!text.trim()) {
+        ctx.ui.notify("Inserted messages cannot be empty", "warning");
+        return false;
+      }
+      const next = { ...virtual.operation, text };
+      state.operations = state.operations.filter(
+        (operation) =>
+          !(
+            operation.kind === "insert" &&
+            operation.anchorUnitId === virtual.anchorUnitId &&
+            operation.position === virtual.position
+          ),
+      );
+      state.operations.push(next);
+      ctx.ui.notify(`Inserted ${virtual.role} row updated`, "info");
+      return true;
+    },
+    list,
+  );
+}
+
+function hasLegacyInsert(state: ReturnType<typeof selectorState>): boolean {
+  return state.operations.some((operation) => operation.kind === "insert-note");
+}
+
+function isCtrlS(keyData: string): boolean {
+  return matchesKey(keyData, "ctrl+s") || keyData === "\\x13";
 }
 
 function cloneDisplayNode(
@@ -488,13 +782,15 @@ function editorHelpLine(
 ): string {
   const line = state.inlineInput
     ? "Tree editor input: Enter stage change · Escape cancel input"
-    : state.flow === "save-review"
-      ? "Tree editor save: Yes apply · Cancel keep staged"
-      : state.flow === "exit-confirm"
-        ? "Exit menu: Yes save · No keep editing · No abandon"
-        : state.editMode
-          ? "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u unstage"
-          : "Tree editor: Tab edit mode · Escape exit /tree";
+    : state.flow === "role-choice"
+      ? "Insert role: User · Assistant · Context note · Escape cancel"
+      : state.flow === "save-review"
+        ? "Tree editor save: ctrl+s · Yes apply · Cancel keep staged"
+        : state.flow === "exit-confirm"
+          ? "Exit menu: Yes save · No keep editing · No abandon"
+          : state.editMode
+            ? "Tree editor ON: ctrl+s save · e edit · d remove · a/Shift+A insert · u unstage"
+            : "Tree editor: Tab edit mode · Escape exit /tree";
   return truncateToWidth(`  ${line}`, Math.max(1, width));
 }
 
@@ -630,7 +926,7 @@ function toggleRemoval(
   getExtensionContext()?.ui.notify("Tree unit removal staged", "info");
 }
 
-async function insertNote(
+async function beginInsertRole(
   selector: SelectorLike,
   state: ReturnType<typeof selectorState>,
   anchorEntryId: string,
@@ -639,28 +935,196 @@ async function insertNote(
 ): Promise<void> {
   const ctx = getExtensionContext();
   if (!ctx?.hasUI) return;
+  if (
+    !list ||
+    !Array.isArray(list.flatNodes) ||
+    typeof list.applyFilter !== "function"
+  ) {
+    ctx.ui.notify(
+      "Inserted rows are unavailable in this Pi build; native /tree remains unchanged",
+      "warning",
+    );
+    return;
+  }
+  const items: ChoiceItem[] = [
+    { value: "user", label: "User" },
+    { value: "assistant", label: "Assistant" },
+    { value: "context", label: "Context note" },
+  ];
+  const shown = showChoiceMenu(
+    selector,
+    state,
+    list,
+    "role-choice",
+    "Choose inserted row role",
+    items,
+    0,
+    (value) => {
+      const role = value as "user" | "assistant" | "context";
+      const assistant =
+        role === "assistant" ? activeModelIdentity() : undefined;
+      if (role === "assistant" && !assistant) {
+        ctx.ui.notify(
+          "Assistant insertion unavailable: the active model api, provider, and model identity could not be determined",
+          "warning",
+        );
+        return;
+      }
+      startInsertInput(
+        selector,
+        state,
+        anchorEntryId,
+        position,
+        role,
+        assistant,
+        list,
+      );
+    },
+    () => undefined,
+  );
+  if (!shown || !state.flowComponent) return;
+  // Keep a compatibility path for the original context-note text-first flow.
+  // A printable character is not a selector action, so treat it as the first
+  // character of a context note instead of staging anything immediately.
+  const menuFlow = state.flowComponent;
+  state.flowComponent = {
+    ...menuFlow,
+    handleInput: (data) => {
+      if (["\u001b", "\r", "\n", "\u001b[A", "\u001b[B"].includes(data)) {
+        menuFlow.handleInput(data);
+        return;
+      }
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        menuFlow.cancel();
+        startInsertInput(
+          selector,
+          state,
+          anchorEntryId,
+          position,
+          "context",
+          undefined,
+          list,
+          true,
+          data,
+        );
+        return;
+      }
+      menuFlow.handleInput(data);
+    },
+  };
+}
+
+function activeModelIdentity():
+  | { api: string; provider: string; model: string }
+  | undefined {
+  const mode = getActiveMode();
+  const session = mode?.session as Record<string, unknown> | undefined;
+  const contextModel = (
+    getExtensionContext() as Record<string, unknown> | undefined
+  )?.model;
+  const model = session?.model ?? contextModel;
+  if (model && typeof model === "object") {
+    const candidate = model as Record<string, unknown>;
+    if (
+      typeof candidate.api === "string" &&
+      typeof candidate.provider === "string" &&
+      typeof candidate.id === "string" &&
+      candidate.api &&
+      candidate.provider &&
+      candidate.id
+    ) {
+      return {
+        api: candidate.api,
+        provider: candidate.provider,
+        model: candidate.id,
+      };
+    }
+  }
+  const manager = getManager();
+  if (!manager) return undefined;
+  const path = activePath(manager.getEntries(), manager.getLeafId());
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const entry = path[index];
+    const message = entry?.message;
+    if (
+      entry?.type === "message" &&
+      message &&
+      typeof message === "object" &&
+      (message as { role?: unknown }).role === "assistant"
+    ) {
+      const candidate = message as Record<string, unknown>;
+      if (
+        typeof candidate.api === "string" &&
+        typeof candidate.provider === "string" &&
+        typeof candidate.model === "string" &&
+        candidate.api &&
+        candidate.provider &&
+        candidate.model
+      ) {
+        return {
+          api: candidate.api,
+          provider: candidate.provider,
+          model: candidate.model,
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+function startInsertInput(
+  selector: SelectorLike,
+  state: ReturnType<typeof selectorState>,
+  anchorEntryId: string,
+  position: "before" | "after",
+  role: "user" | "assistant" | "context",
+  assistant: { api: string; provider: string; model: string } | undefined,
+  list: TreeListLike | undefined,
+  legacy = false,
+  initialText = "",
+): void {
+  const ctx = getExtensionContext();
+  if (!ctx?.hasUI) return;
   startInlineEdit(
     selector,
     state,
-    "",
+    initialText,
     (text) => {
       if (!text.trim()) {
-        ctx.ui.notify("Inserted context notes cannot be empty", "warning");
+        ctx.ui.notify("Inserted messages cannot be empty", "warning");
         return false;
       }
       snapshotIfNeeded(state);
       const unit = logicalUnitForEntry(anchorEntryId);
       const anchorUnitId = unit?.id ?? anchorEntryId;
-      replaceOperationForUnit(state, unit, anchorEntryId, {
-        kind: "insert-note",
-        anchorUnitId,
-        position,
-        text,
-      });
-      ctx.ui.notify("Context note staged", "info");
+      replaceOperationForUnit(
+        state,
+        unit,
+        anchorEntryId,
+        legacy
+          ? {
+              kind: "insert-note",
+              anchorUnitId,
+              position,
+              text,
+            }
+          : {
+              kind: "insert",
+              anchorUnitId,
+              position,
+              role,
+              text,
+              ...(assistant ? { assistant } : {}),
+            },
+      );
+      ctx.ui.notify(
+        legacy ? "Context note staged" : `Inserted ${role} row staged`,
+        "info",
+      );
       return true;
     },
     list,
+    !legacy,
   );
 }
 
@@ -861,7 +1325,13 @@ function showFlowComponent(
     onFinish();
   };
   state.flowComponent = {
-    handleInput: onInput,
+    handleInput: (data) => {
+      if (matchesKey(data, "escape") || data === "\u001b") {
+        state.flowComponent?.cancel();
+        return;
+      }
+      onInput(data);
+    },
     finish,
     cancel: () => {
       state.flow = undefined;
@@ -880,7 +1350,7 @@ function showFlowComponent(
 
 type ChoiceItem = { value: string; label: string };
 
-type ChoiceFlow = "save-review" | "exit-confirm";
+type ChoiceFlow = "save-review" | "exit-confirm" | "role-choice";
 
 const choiceTheme = {
   selectedPrefix: (text: string) => text,
@@ -994,7 +1464,7 @@ function showExitConfirmation(
     "exit-confirm",
     `Save changes to ${state.operations.length} staged item${state.operations.length === 1 ? "" : "s"}?`,
     [
-      { value: "apply", label: "Yes, and return to conversation" },
+      { value: "apply", label: "Yes. Return to conversation" },
       {
         value: "keep",
         label: "No. Return to tree and continue making changes",

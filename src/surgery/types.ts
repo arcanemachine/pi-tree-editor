@@ -21,6 +21,31 @@ export type TextBlockLocation = {
   path: "message" | "custom_message" | "summary";
 };
 
+export type InsertRole = "user" | "assistant" | "context";
+
+export type AssistantModelIdentity = {
+  api: string;
+  provider: string;
+  model: string;
+};
+
+export type InsertOperation = {
+  kind: "insert";
+  anchorUnitId: string;
+  position: "before" | "after";
+  role: InsertRole;
+  text: string;
+  assistant?: AssistantModelIdentity;
+};
+
+/** Legacy context-note input retained for standalone callers of the V1 API. */
+export type InsertNoteOperation = {
+  kind: "insert-note";
+  anchorUnitId: string;
+  position: "before" | "after";
+  text: string;
+};
+
 export type SurgeryOperation =
   | {
       kind: "edit-text";
@@ -35,12 +60,8 @@ export type SurgeryOperation =
       thinking: string;
     }
   | { kind: "remove-unit"; unitId: string }
-  | {
-      kind: "insert-note";
-      anchorUnitId: string;
-      position: "before" | "after";
-      text: string;
-    };
+  | InsertOperation
+  | InsertNoteOperation;
 
 export type LogicalUnitKind =
   | "message"
@@ -64,6 +85,15 @@ export type LogicalUnit = {
 export type ReplayItem =
   | { kind: "entry"; sourceId: string; entry: SessionEntryLike }
   | {
+      kind: "insert";
+      sourceId: string;
+      text: string;
+      position: "before" | "after";
+      anchorUnitId: string;
+      role: InsertRole;
+      assistant?: AssistantModelIdentity;
+    }
+  | {
       kind: "insert-note";
       sourceId: string;
       text: string;
@@ -83,6 +113,7 @@ export type SurgeryPlan = {
   editedEntryIds: string[];
   editedReasoningEntryIds: string[];
   removedReasoningCount: number;
+  insertedEntryIds: string[];
   insertedNoteIds: string[];
   warnings: string[];
   earliestAffectedIndex: number;

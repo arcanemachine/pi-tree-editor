@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/arcanemachine/pi-tree-editor/main/logo.jpg" alt="pi-tree-editor logo" width="250" />
 </p>
 
-Safely edit Pi conversation history from the native `/tree` selector. Stage edits, confirm them in a compact save menu, and apply them as a new conversation branch without changing files or other external state.
+Safely edit Pi conversation history from the native `/tree` selector. Stage edits, review them in a compact save menu, and apply them as a new conversation branch without changing files or other external state.
 
 ## Installation and compatibility
 
@@ -33,56 +33,44 @@ Tested against Pi 0.84.1. Compatible future Pi versions must provide the require
 Open `/tree`, then press `Tab` to enter tree-editor mode. Native tree navigation, search, filtering, folding, labels, and copy behavior remain available.
 
 ```text
-s save · e edit · d remove · a after · Shift+A before · u unstage
-Escape exits directly when unchanged, or opens the staged-change save menu
+ctrl+s save · e edit · d remove · a insert · Shift+A insert before · u unstage
 ```
 
-- `e` edits a supported text block inline.
-- `d` stages or unstages removal of a logical unit.
-- `a` inserts a visible context note after the selected unit.
-- `Shift+A` inserts a visible context note before the selected unit.
-- `u` unstages the selected logical unit or anchor action.
-- `s` opens a save menu showing the staged item count. `Yes` applies (default); `Cancel` keeps editing.
-- `Escape` cancels inline input. With no staged changes it exits `/tree`; with staged changes it opens `Save changes to N staged item(s)?` (defaulting to the first option):
-  - `Yes, and return to conversation` applies the staged changes.
+- `a` / `Shift+A` first opens a selector-local role menu in this exact order: `User` (default), `Assistant`, `Context note`. Escape returns to the tree without staging. After choosing a role, enter the text in selector-local input.
+- User and assistant inserts become actual staged virtual tree rows immediately before or after the selected logical unit. Rows participate in native filtering, selection, vertical viewport, horizontal viewport, and geometry. `e` edits a selected staged row and `u` unstages it. Source-only actions on a staged row are refused clearly.
+- Assistant inserts are available only when the active model exposes its `api`, `provider`, and `id`; inserted assistant messages are plain synthetic messages with zero usage and a stopped completion, with no reasoning, signatures, tools, or stale metadata.
+- `e` edits a supported source text block inline. `d` stages or unstages removal of a logical unit. Tool calls and all corresponding results remain indivisible.
+- `u` unstages the selected source action or staged inserted row. Staged actions use latest-wins semantics per logical unit.
+- `ctrl+s` is the sole save shortcut in edit mode. It opens a save menu showing the staged item count; `Yes` applies (default), and `Cancel` keeps editing. Plain `s` remains native tree search behavior. Ctrl+Enter is not a save alias.
+- Escape cancels an active inline field or numbered chooser first. With no staged changes it exits `/tree`; with staged changes it opens `Save changes to N staged item(s)?` (defaulting to the first option):
+  - `Yes. Return to conversation` applies the staged changes.
   - `No. Return to tree and continue making changes` keeps editing with staged changes.
   - `No. Return to conversation and abandon staged changes` discards staged changes and exits.
 
-Escape selects the second option.
+Inserted text and source edits support multiline input through Pi's native `Editor`. Plain Enter stages the text exactly; Escape cancels. Use Shift+Enter or Ctrl+J for a newline. Unchanged prefills preserve their exact whitespace and newline form, including CRLF and CR-only text.
 
-Staged rows show present-tense `[edit]`, `[edit reasoning]`, `[remove]`, and insert markers, and annotate inserted notes at their anchor when native display capabilities allow it. Staging another action on a logical unit replaces its prior action; `u` removes the selected unit's staged action. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter. Escape returns to the tree without applying or discarding staged changes. Planning or apply failures leave staged work available for correction or retry.
+## What can be edited
 
-### Multiline input
-
-Editing a prefill containing CR or LF uses Pi's native multiline `Editor`, so physical terminal rows remain stable and bounded. Plain `Enter` stages the text exactly; `Escape` cancels. Use `Shift+Enter` or `Ctrl+J` for a newline. Unchanged prefills preserve their exact whitespace and newline form, including CRLF and CR-only text; changed text uses the current editor value.
-
-### What can be edited
-
-`e` edits supported text blocks in user, assistant, custom-message, compaction, and branch-summary entries. Assistant rows show a bounded `[reasoning: …]` preview when native display capabilities allow it. Unsigned assistant reasoning blocks are also eligible: the chooser labels answer text and reasoning separately, and submitting blank reasoning removes only that block. Provider-signed, redacted, tool-associated, or unsupported assistant content is read-only. Tool results and assistant tool-call exchanges are protected from internal edits. `d` operates on logical units, so a tool call and all of its results are removed together. Unsupported structural entries cannot be edited; removal plans that violate structural boundaries fail validation.
+`e` edits supported text blocks in user, assistant, custom-message, compaction, and branch-summary entries. Multiple text blocks are chosen individually. User images and untouched opaque/provider content remain byte-for-byte unchanged. Unsigned assistant reasoning blocks are eligible; provider-signed, redacted, tool-associated, and unsupported assistant content is read-only. Blank reasoning removes only that block when another assistant content block remains.
 
 ## Safety model
 
 Edits use append-only, same-session, copy-on-write reconstruction:
 
-- Existing entries and the original branch are never modified or deleted.
+- Existing entries, the original branch, the session tree, and JSONL are never modified or deleted.
+- Display-only staged rows are fresh in-memory nodes; no staged insert is appended before confirmation.
 - Only the affected suffix is reconstructed; the unchanged prefix is retained.
 - The reconstructed suffix receives fresh entry IDs on a new alternate branch.
 - Unedited reasoning/thinking blocks, images, opaque blocks, provider/model identity, and compaction references are preserved and validated.
-- A non-context audit entry records the reconstruction.
+- A non-context audit entry records the reconstruction, including inserted role and text length rather than duplicate content.
 - Failures return to the original branch; partial alternate entries remain unreachable.
 - Persistence is incremental, so an in-progress reconstruction is not crash-atomic.
 
-This extension does not restore files or Git state, edit tool arguments/results, rewrite JSONL, or call an LLM to summarize content. Reasoning edits are limited to unsigned assistant thinking blocks, preserve all other content blocks, and normalize stale assistant completion metadata.
+This extension does not restore files or Git state, edit tool arguments/results, rewrite JSONL, or call an LLM to summarize content.
 
 ## Graceful fallback
 
-If native capabilities are missing or a hook cannot be installed, pi-tree-editor warns once and leaves Pi's native `/tree` behavior available unchanged. Runtime capability failures disable the editor augmentation while continuing to call native `/tree`. Run:
-
-```text
-/tree-editor status
-```
-
-to inspect hook availability and compatibility details.
+If native capabilities are missing or a hook cannot be installed, pi-tree-editor warns once with an actionable reason and leaves Pi's native `/tree` behavior available unchanged. Unsupported assistant insertion identity and unsafe virtual-row capabilities fail closed without mutating the session.
 
 ## Development
 

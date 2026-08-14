@@ -7,4 +7,4 @@
 - Preserve original branches, tool exchanges, compaction references, provider metadata, and opaque content.
 - Add selector-local help, review, exit confirmation, and multi-block selection without replacing the native tree.
 - Keep native long-message navigation and horizontal viewport rendering unchanged.
-- Add `/tree-editor status`, package documentation, and logo metadata for Pi package discovery.
+- Add role-specific staged user, assistant, and context rows with append-only replay and native viewport geometry.

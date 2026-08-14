@@ -142,6 +142,7 @@ describe("native compatibility", () => {
     expect(modules.interactiveCalls).toHaveLength(1);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("native /tree editing unavailable");
+    expect(warnings[0]).not.toContain("/tree-editor status");
   });
 
   it("keeps native behavior when selector shape probing fails", () => {
@@ -172,6 +173,7 @@ describe("native compatibility", () => {
     expect(modules.interactiveCalls).toHaveLength(1);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("required native methods");
+    expect(warnings[0]).not.toContain("/tree-editor status");
   });
 
   it("rolls back selector patch when interactive patch installation fails", () => {

@@ -47,6 +47,7 @@ export type ApplyResult = {
   auditEntryId: string;
   candidateLeafId: string;
   oldToNew: Record<string, string>;
+  insertedEntryIds: string[];
   insertedNoteIds: string[];
   recoveryEntryId?: string;
 };
@@ -90,6 +91,7 @@ export async function applySurgery(
 
   validateCapabilities(manager, plan);
   const oldToNew: Record<string, string> = {};
+  const insertedEntryIds: string[] = [];
   const insertedNoteIds: string[] = [];
   for (const entry of plan.prefix) oldToNew[entry.id] = entry.id;
   let candidateLeafId: string | null = plan.prefix.at(-1)?.id ?? null;
@@ -98,19 +100,62 @@ export async function applySurgery(
     else manager.resetLeaf();
 
     for (const item of plan.replay) {
-      if (item.kind === "insert-note") {
-        const append = manager.appendCustomMessageEntry;
-        if (!append)
-          throw new SurgeryError(
-            "MISSING_CAPABILITY",
-            "Pi cannot append custom context messages",
-          );
-        const id = append.call(manager, NOTE_TYPE, item.text, true, {
-          anchorUnitId: item.anchorUnitId,
-          position: item.position,
-        });
+      if (item.kind === "insert-note" || item.kind === "insert") {
+        const role = item.kind === "insert-note" ? "context" : item.role;
+        let id: string;
+        if (role === "context") {
+          const append = manager.appendCustomMessageEntry;
+          if (!append)
+            throw new SurgeryError(
+              "MISSING_CAPABILITY",
+              "Pi cannot append custom context messages",
+            );
+          id = append.call(manager, NOTE_TYPE, item.text, true, {
+            anchorUnitId: item.anchorUnitId,
+            position: item.position,
+            role,
+          });
+          insertedNoteIds.push(id);
+        } else if (role === "user") {
+          if (!manager.appendMessage)
+            throw new SurgeryError(
+              "MISSING_CAPABILITY",
+              "Pi cannot append inserted user messages",
+            );
+          id = manager.appendMessage.call(manager, {
+            role: "user",
+            content: item.text,
+          });
+        } else {
+          const identity = item.kind === "insert" ? item.assistant : undefined;
+          if (
+            !identity ||
+            !identity.api ||
+            !identity.provider ||
+            !identity.model
+          ) {
+            throw new SurgeryError(
+              "MISSING_MODEL_IDENTITY",
+              "Assistant inserts require the active model api, provider, and model identity",
+            );
+          }
+          if (!manager.appendMessage)
+            throw new SurgeryError(
+              "MISSING_CAPABILITY",
+              "Pi cannot append inserted assistant messages",
+            );
+          id = manager.appendMessage.call(manager, {
+            role: "assistant",
+            content: item.text,
+            api: identity.api,
+            provider: identity.provider,
+            model: identity.model,
+            usage: zeroUsage(),
+            stopReason: "stop",
+          });
+        }
         oldToNew[item.sourceId] = id;
-        insertedNoteIds.push(id);
+        insertedEntryIds.push(id);
         candidateLeafId = id;
         continue;
       }
@@ -155,18 +200,28 @@ export async function applySurgery(
               }
             : operation.kind === "insert-note"
               ? {
-                  kind: operation.kind,
+                  kind: "insert",
+                  role: "context",
                   anchorUnitId: operation.anchorUnitId,
                   position: operation.position,
                   textLength: operation.text.length,
                 }
-              : operation,
+              : operation.kind === "insert"
+                ? {
+                    kind: operation.kind,
+                    role: operation.role,
+                    anchorUnitId: operation.anchorUnitId,
+                    position: operation.position,
+                    textLength: operation.text.length,
+                  }
+                : operation,
       ),
       oldToNew,
       removedEntryIds: plan.removedEntryIds,
       editedEntryIds: plan.editedEntryIds,
       editedReasoningEntryIds: plan.editedReasoningEntryIds,
       removedReasoningCount: plan.removedReasoningCount,
+      insertedEntryIds,
       insertedNoteIds,
       warnings: plan.warnings,
     });
@@ -191,6 +246,7 @@ export async function applySurgery(
       auditEntryId,
       candidateLeafId,
       oldToNew,
+      insertedEntryIds,
       insertedNoteIds,
     };
   } catch (error) {
@@ -332,11 +388,15 @@ function validateCapabilities(
   };
   requireCapability("appendCustomEntry", manager.appendCustomEntry);
   for (const item of plan.replay) {
-    if (item.kind === "insert-note") {
-      requireCapability(
-        "appendCustomMessageEntry",
-        manager.appendCustomMessageEntry,
-      );
+    if (item.kind === "insert-note" || item.kind === "insert") {
+      if (item.kind === "insert-note" || item.role === "context") {
+        requireCapability(
+          "appendCustomMessageEntry",
+          manager.appendCustomMessageEntry,
+        );
+      } else {
+        requireCapability("appendMessage", manager.appendMessage);
+      }
       continue;
     }
     switch (item.entry.type) {
@@ -383,6 +443,17 @@ function validateCapabilities(
       `Pi cannot apply this plan; missing ${[...missingCapabilities].join(", ")}`,
     );
   }
+}
+
+function zeroUsage(): Record<string, unknown> {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
 }
 
 function missing(type: string): SurgeryError {

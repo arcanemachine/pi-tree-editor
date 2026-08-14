@@ -64,7 +64,10 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     string,
     { blockIndex: number; thinking: string }
   >();
-  const inserts: Array<Extract<SurgeryOperation, { kind: "insert-note" }>> = [];
+  const inserts: Array<
+    | Extract<SurgeryOperation, { kind: "insert" }>
+    | Extract<SurgeryOperation, { kind: "insert-note" }>
+  > = [];
   const affectedIndices: number[] = [];
 
   for (const operation of normalized) {
@@ -201,8 +204,27 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     if (!operation.text.trim()) {
       throw new SurgeryError(
         "INVALID_TEXT",
-        "Inserted context notes cannot be empty",
+        "Inserted messages cannot be empty",
       );
+    }
+    const role = operation.kind === "insert-note" ? "context" : operation.role;
+    if (role !== "user" && role !== "assistant" && role !== "context") {
+      throw new SurgeryError("INVALID_INSERT_ROLE", "Unknown inserted role");
+    }
+    if (role === "assistant") {
+      const identity =
+        operation.kind === "insert" ? operation.assistant : undefined;
+      if (
+        !identity ||
+        !identity.api.trim() ||
+        !identity.provider.trim() ||
+        !identity.model.trim()
+      ) {
+        throw new SurgeryError(
+          "MISSING_MODEL_IDENTITY",
+          "Assistant inserts require the active model api, provider, and model identity",
+        );
+      }
     }
     if (removedUnits.has(unit.id)) {
       throw new SurgeryError(
@@ -218,12 +240,12 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     ) {
       throw new SurgeryError(
         "CONFLICTING_OPERATION",
-        `A note is already staged ${operation.position} of unit ${unit.id}`,
+        `An inserted ${role} is already staged ${operation.position} of unit ${unit.id}`,
       );
     }
     operation.anchorUnitId = unit.id;
     inserts.push({ ...operation, anchorUnitId: unit.id });
-    // Reconstruct the anchor itself so an after-note can be appended at the
+    // Reconstruct the anchor itself so an inserted row can be appended at the
     // logical boundary without relying on an entry that was left on the old branch.
     affectedIndices.push(unit.startIndex);
   }
@@ -274,11 +296,13 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
   const replay: ReplayItem[] = [];
   const insertBefore = new Map<
     string,
-    Extract<SurgeryOperation, { kind: "insert-note" }>
+    | Extract<SurgeryOperation, { kind: "insert" }>
+    | Extract<SurgeryOperation, { kind: "insert-note" }>
   >();
   const insertAfter = new Map<
     string,
-    Extract<SurgeryOperation, { kind: "insert-note" }>
+    | Extract<SurgeryOperation, { kind: "insert" }>
+    | Extract<SurgeryOperation, { kind: "insert-note" }>
   >();
   for (const insert of inserts) {
     (insert.position === "before" ? insertBefore : insertAfter).set(
@@ -314,7 +338,9 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
   const warnings = [
     ...opaqueReferenceWarnings(sourcePath, earliestAffectedIndex),
     ...(inserts.length > 0
-      ? ["Inserted notes become visible custom context messages."]
+      ? [
+          "Inserted messages become visible staged rows and active context entries.",
+        ]
       : []),
     ...(units.some(
       (unit) => removedUnits.has(unit.id) && unit.kind === "compaction",
@@ -342,7 +368,14 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     removedReasoningCount: [...reasoningEdited.values()].filter(
       (edit) => edit.thinking.trim().length === 0,
     ).length,
-    insertedNoteIds: inserts.map((_, index) => `insert-note-${index + 1}`),
+    insertedEntryIds: inserts.map((_, index) => `insert-${index + 1}`),
+    insertedNoteIds: inserts
+      .map((insert, index) =>
+        insert.kind === "insert-note" || insert.role === "context"
+          ? `insert-note-${index + 1}`
+          : undefined,
+      )
+      .filter((id): id is string => id !== undefined),
     warnings,
     earliestAffectedIndex,
   };
@@ -358,16 +391,29 @@ function isSoleReasoningBlock(
 }
 
 function noteItem(
-  operation: Extract<SurgeryOperation, { kind: "insert-note" }>,
+  operation:
+    | Extract<SurgeryOperation, { kind: "insert" }>
+    | Extract<SurgeryOperation, { kind: "insert-note" }>,
   position: "before" | "after",
   anchorUnitId: string,
 ): ReplayItem {
+  if (operation.kind === "insert-note") {
+    return {
+      kind: "insert-note",
+      sourceId: `insert-note-${operation.anchorUnitId}-${position}`,
+      text: operation.text,
+      position,
+      anchorUnitId,
+    };
+  }
   return {
-    kind: "insert-note",
-    sourceId: `insert-note-${operation.anchorUnitId}-${position}`,
+    kind: "insert",
+    sourceId: `insert-${operation.role}-${operation.anchorUnitId}-${position}`,
     text: operation.text,
     position,
     anchorUnitId,
+    role: operation.role,
+    assistant: operation.assistant,
   };
 }
 
@@ -536,18 +582,43 @@ function buildCandidate(
   const oldToCandidate = new Map(prefix.map((entry) => [entry.id, entry.id]));
   let parentId = result.at(-1)?.id ?? null;
   for (const item of replay) {
-    if (item.kind === "insert-note") {
+    if (item.kind === "insert-note" || item.kind === "insert") {
       const candidateId = `candidate:${item.sourceId}`;
-      result.push({
-        type: "custom_message",
-        id: candidateId,
-        parentId,
-        timestamp: new Date(0).toISOString(),
-        customType: "pi-tree-editor.note",
-        content: item.text,
-        display: true,
-        details: { anchorUnitId: item.anchorUnitId, position: item.position },
-      });
+      const entry =
+        item.kind === "insert-note" || item.role === "context"
+          ? {
+              type: "custom_message",
+              id: candidateId,
+              parentId,
+              timestamp: new Date(0).toISOString(),
+              customType: "pi-tree-editor.note",
+              content: item.text,
+              display: true,
+              details: {
+                anchorUnitId: item.anchorUnitId,
+                position: item.position,
+                role: "context",
+              },
+            }
+          : {
+              type: "message",
+              id: candidateId,
+              parentId,
+              timestamp: new Date(0).toISOString(),
+              message:
+                item.role === "assistant"
+                  ? {
+                      role: "assistant",
+                      content: item.text,
+                      api: item.assistant?.api,
+                      provider: item.assistant?.provider,
+                      model: item.assistant?.model,
+                      usage: zeroUsage(),
+                      stopReason: "stop",
+                    }
+                  : { role: "user", content: item.text },
+            };
+      result.push(entry);
       parentId = candidateId;
       oldToCandidate.set(item.sourceId, candidateId);
       continue;

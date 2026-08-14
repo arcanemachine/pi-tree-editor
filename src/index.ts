@@ -2,7 +2,6 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { registerTreeEditorCommand } from "./command.js";
 import { installNativeHooks } from "./native/internal-imports.js";
 import {
   clearSessionState,
@@ -11,7 +10,6 @@ import {
 } from "./native/patch-state.js";
 
 export default function piTreeEditor(pi: ExtensionAPI): void {
-  registerTreeEditorCommand(pi);
   void installNativeHooks();
 
   pi.on("session_start", (_event, ctx) => {

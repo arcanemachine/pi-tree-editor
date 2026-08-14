@@ -11,7 +11,7 @@ export type SelectorState = {
   };
   busy: boolean;
   confirmingExit: boolean;
-  flow?: "save-review" | "exit-confirm" | "block-choice";
+  flow?: "save-review" | "exit-confirm" | "block-choice" | "role-choice";
   flowComponent?: {
     handleInput(data: string): void;
     finish(): void;
@@ -78,7 +78,7 @@ function notifyHookFailure(): void {
   notifiedFailureReason = status.reason;
   try {
     context.ui.notify(
-      `pi-tree-editor: native /tree editing unavailable — ${status.reason}. Use native /tree unchanged; run /tree-editor status for details.`,
+      `pi-tree-editor: native /tree editing unavailable — ${status.reason}. Native /tree remains available unchanged.`,
       "warning",
     );
   } catch {

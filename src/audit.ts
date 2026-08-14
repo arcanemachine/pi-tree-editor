@@ -11,7 +11,7 @@ export function auditPreview(plan: SurgeryPlan): string[] {
     `Change ${plan.editedEntryIds.length} text entr${plan.editedEntryIds.length === 1 ? "y" : "ies"}`,
     `Change ${plan.editedReasoningEntryIds.length} reasoning entr${plan.editedReasoningEntryIds.length === 1 ? "y" : "ies"}`,
     `Remove ${plan.removedReasoningCount} reasoning block${plan.removedReasoningCount === 1 ? "" : "s"}`,
-    `Insert ${plan.insertedNoteIds.length} context note${plan.insertedNoteIds.length === 1 ? "" : "s"}`,
+    `Insert ${plan.insertedEntryIds.length} staged message${plan.insertedEntryIds.length === 1 ? "" : "s"}`,
     "The original branch remains unchanged.",
   ];
   return plan.warnings.length > 0
