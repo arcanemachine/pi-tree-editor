@@ -51,10 +51,10 @@ describe("native tree editor interaction", () => {
     expect(selector.render(100).join("\n")).toContain("Tab edit mode");
     selector.handleInput("\t");
     expect(selector.render(100).join("\n")).toContain(
-      "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u undo",
+      "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u unstage",
     );
     expect(notifications.at(-1)).toContain(
-      "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u undo",
+      "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u unstage",
     );
     selector.handleInput("a");
     selector.handleInput("n");
@@ -694,7 +694,7 @@ describe("native tree editor interaction", () => {
     selector.handleInput("!");
     selector.handleInput("\r");
     const editedLines = render(48).join("\n");
-    expect(editedLines).toContain("[edited]");
+    expect(editedLines).toContain("[edit]");
     expect(editedLines).toContain("!editable entry");
     const editedEntry = manager
       .getEntries()
@@ -706,13 +706,13 @@ describe("native tree editor interaction", () => {
 
     selector.handleInput("u");
     const restoredLines = render(48).join("\n");
-    expect(restoredLines).not.toContain("[edited]");
+    expect(restoredLines).not.toContain("[edit]");
     expect(restoredLines).toContain("editable entry");
 
     selector.handleInput("d");
-    expect(render(48).join("\n")).toContain("[removed]");
+    expect(render(48).join("\n")).toContain("[remove]");
     selector.handleInput("u");
-    expect(render(48).join("\n")).not.toContain("[removed]");
+    expect(render(48).join("\n")).not.toContain("[remove]");
 
     selector.handleInput("a");
     selector.handleInput("n");
@@ -720,9 +720,9 @@ describe("native tree editor interaction", () => {
     selector.handleInput("t");
     selector.handleInput("e");
     selector.handleInput("\r");
-    expect(render(48).join("\n")).toContain("[+ after]");
+    expect(render(48).join("\n")).toContain("[insert after]");
     selector.handleInput("u");
-    expect(render(48).join("\n")).not.toContain("[+ after]");
+    expect(render(48).join("\n")).not.toContain("[insert after]");
 
     selector.handleInput("A");
     selector.handleInput("b");
@@ -732,9 +732,9 @@ describe("native tree editor interaction", () => {
     selector.handleInput("r");
     selector.handleInput("e");
     selector.handleInput("\r");
-    expect(render(48).join("\n")).toContain("[+ before]");
+    expect(render(48).join("\n")).toContain("[insert before]");
     selector.handleInput("u");
-    expect(render(48).join("\n")).not.toContain("[+ before]");
+    expect(render(48).join("\n")).not.toContain("[insert before]");
 
     for (const width of [100, 48, 24, 12, 4]) {
       const widthHeight = render(width).length;
@@ -745,7 +745,7 @@ describe("native tree editor interaction", () => {
     }
   });
 
-  it("previews multiple staged edits in one entry without mutating it", async () => {
+  it("keeps one latest staged edit per entry without mutating it", async () => {
     await installNativeHooks();
     const treeSelectorUrl = new URL(
       "./modes/interactive/components/tree-selector.js",
@@ -788,16 +788,246 @@ describe("native tree editor interaction", () => {
     selector.handleInput("2");
     selector.handleInput("B");
     selector.handleInput("\r");
+    expect(selectorState(selector).operations).toHaveLength(1);
+    expect(selectorState(selector).operations[0]).toMatchObject({
+      kind: "edit-text",
+      blockIndex: 1,
+      text: "Bsecond block",
+    });
     const rendered = selector.render(80).join("\n");
-    expect(rendered).toContain("[edited]");
-    expect(rendered).toContain("Afirst block");
-    expect(rendered).toContain("Bsecond block");
+    expect(rendered).toContain("[edit]");
+    expect(rendered).not.toContain("Afirst block");
+    expect(rendered).toContain("first blockBsecond block");
     const entry = manager
       .getEntries()
       .find((candidate) => candidate.id === leafId) as
       | { message?: { content?: unknown } }
       | undefined;
     expect(entry?.message?.content).toEqual(content);
+  });
+
+  it("replaces staged actions and unstages the selected unit", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const themeUrl = new URL(
+      "./modes/interactive/theme/theme.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { initTheme } = await import(themeUrl);
+    initTheme("dark", false);
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-latest-wins-regression",
+    );
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: "selected",
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: manager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    const notifications: string[] = [];
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: (message: string) => notifications.push(message) },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    const staged = () => selectorState(selector).operations;
+    const render = () => selector.render(80).join("\n");
+    const markerCount = () =>
+      (render().match(/\[(?:edit|remove|insert before|insert after)\]/g) ?? [])
+        .length;
+
+    selector.handleInput("e");
+    selector.handleInput("X");
+    selector.handleInput("\r");
+    expect(staged()).toHaveLength(1);
+    expect(staged()[0]).toMatchObject({ kind: "edit-text", text: "Xselected" });
+    expect(markerCount()).toBe(1);
+
+    selector.handleInput("d");
+    expect(staged()).toEqual([{ kind: "remove-unit", unitId: leafId }]);
+    expect(render()).toContain("[remove]");
+    expect(render()).not.toContain("[edit]");
+
+    selector.handleInput("e");
+    selector.handleInput("Y");
+    selector.handleInput("\r");
+    expect(staged()).toHaveLength(1);
+    expect(staged()[0]).toMatchObject({ kind: "edit-text", text: "Yselected" });
+
+    selector.handleInput("e");
+    selector.handleInput("\r");
+    expect(staged()[0]).toMatchObject({ kind: "edit-text", text: "Yselected" });
+
+    selector.handleInput("a");
+    selector.handleInput("n");
+    selector.handleInput("\r");
+    expect(staged()).toHaveLength(1);
+    expect(staged()[0]).toMatchObject({
+      kind: "insert-note",
+      position: "after",
+    });
+    expect(render()).toContain("[insert after]");
+    expect(markerCount()).toBe(1);
+
+    selector.handleInput("e");
+    selector.handleInput("Z");
+    selector.handleInput("\r");
+    expect(staged()[0]).toMatchObject({ kind: "edit-text", text: "Zselected" });
+    expect(render()).not.toContain("[insert after]");
+
+    selector.handleInput("d");
+    expect(staged()).toEqual([{ kind: "remove-unit", unitId: leafId }]);
+    selector.handleInput("A");
+    selector.handleInput("b");
+    selector.handleInput("\r");
+    expect(staged()[0]).toMatchObject({
+      kind: "insert-note",
+      position: "before",
+    });
+    expect(render()).toContain("[insert before]");
+    selector.handleInput("a");
+    selector.handleInput("a");
+    selector.handleInput("\r");
+    expect(staged()[0]).toMatchObject({
+      kind: "insert-note",
+      position: "after",
+    });
+    expect(render()).not.toContain("[insert before]");
+    expect(markerCount()).toBe(1);
+
+    selector.handleInput("u");
+    expect(staged()).toHaveLength(0);
+    expect(render()).not.toMatch(
+      /\[(?:edit|remove|insert before|insert after)\]/,
+    );
+    selector.handleInput("u");
+    expect(notifications.at(-1)).toContain("No staged action");
+    const entry = manager.getEntries().find((item) => item.id === leafId) as
+      | { message?: { content?: unknown } }
+      | undefined;
+    expect(entry?.message?.content).toBe("selected");
+  });
+
+  it("unstages only the selected unit when several units are staged", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-selected-unstage-regression",
+    );
+    const firstId = manager.appendMessage({
+      role: "user",
+      content: "first",
+      timestamp: 1,
+    });
+    const secondId = manager.appendMessage({
+      role: "user",
+      content: "second",
+      timestamp: 2,
+    });
+    setActiveMode({ sessionManager: manager } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      secondId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    selector.handleInput("d");
+    selector.handleInput("\u001b[A");
+    selector.handleInput("d");
+    expect(selectorState(selector).operations).toEqual([
+      { kind: "remove-unit", unitId: secondId },
+      { kind: "remove-unit", unitId: firstId },
+    ]);
+    selector.handleInput("\u001b[B");
+    selector.handleInput("u");
+    expect(selectorState(selector).operations).toEqual([
+      { kind: "remove-unit", unitId: firstId },
+    ]);
+  });
+
+  it("unstages a selected tool logical unit as one action", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-tool-unit-unstage-regression",
+    );
+    const callId = manager.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: 1,
+    });
+    const resultId = manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "bash",
+      content: [{ type: "text", text: "result" }],
+      isError: false,
+      timestamp: 2,
+    });
+    const before = structuredClone(manager.getEntries());
+    setActiveMode({ sessionManager: manager } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      resultId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    selector.handleInput("d");
+    expect(selectorState(selector).operations).toEqual([
+      { kind: "remove-unit", unitId: callId },
+    ]);
+    expect(selector.render(80).join("\n")).toContain("[remove]");
+    selector.handleInput("u");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(manager.getEntries()).toEqual(before);
   });
 
   it("stays bounded through repeated narrow multiline navigation and state changes", async () => {

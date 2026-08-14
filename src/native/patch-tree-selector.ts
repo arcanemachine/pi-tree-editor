@@ -109,7 +109,7 @@ export function patchTreeSelector(
       state.editMode = !state.editMode;
       ctx?.ui.notify(
         state.editMode
-          ? "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u undo"
+          ? "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u unstage"
           : "Tree editor mode off",
         "info",
       );
@@ -133,9 +133,8 @@ export function patchTreeSelector(
       return;
     }
     if (keyData === "u" || keyData === "U") {
-      state.operations.pop();
-      if (state.operations.length === 0) state.snapshot = undefined;
-      getExtensionContext()?.ui.notify("Undid latest staged tree edit", "info");
+      if (!selected) return;
+      unstageSelected(state, selected.entry.id);
       return;
     }
     if (keyData === "d" || keyData === "D") {
@@ -334,50 +333,30 @@ function displayAnnotations(
   state: ReturnType<typeof selectorState>,
   theme: DisplayTheme,
 ): DisplayAnnotations {
-  const manager = getManager();
-  const path = manager
-    ? activePath(manager.getEntries(), manager.getLeafId())
-    : [];
-  const unit = buildLogicalUnits(path).units.find((candidate) =>
-    candidate.entryIds.includes(entry.id),
+  const unit = logicalUnitForEntry(entry.id);
+  const operation = state.operations.find((candidate) =>
+    operationTargetsUnit(candidate, unit, entry.id),
   );
-  const unitId = unit?.id ?? entry.id;
-  const edits: Array<{ text: string; blockIndex?: number }> = [];
-  let removed = false;
-  let before = false;
-  let after = false;
-  for (const operation of state.operations) {
-    if (operation.kind === "edit-text" && operation.entryId === entry.id) {
-      edits.push({ text: operation.text, blockIndex: operation.blockIndex });
-    }
-  }
-  for (let index = state.operations.length - 1; index >= 0; index -= 1) {
-    const operation = state.operations[index];
-    if (
-      operation.kind === "remove-unit" &&
-      (operation.unitId === unitId || operation.unitId === entry.id)
-    ) {
-      removed = true;
-    } else if (
-      operation.kind === "insert-note" &&
-      (operation.anchorUnitId === unitId || operation.anchorUnitId === entry.id)
-    ) {
-      if (operation.position === "before" && unit?.entryIds[0] === entry.id) {
-        before = true;
-      }
-      if (
-        operation.position === "after" &&
-        unit?.entryIds.at(-1) === entry.id
-      ) {
-        after = true;
-      }
-    }
-  }
+  const edits =
+    operation?.kind === "edit-text" && operation.entryId === entry.id
+      ? [{ text: operation.text, blockIndex: operation.blockIndex }]
+      : [];
+  const isFirstEntry = (unit?.entryIds[0] ?? entry.id) === entry.id;
+  const isLastEntry = (unit?.entryIds.at(-1) ?? entry.id) === entry.id;
+  const removed = operation?.kind === "remove-unit";
+  const before =
+    operation?.kind === "insert-note" &&
+    operation.position === "before" &&
+    isFirstEntry;
+  const after =
+    operation?.kind === "insert-note" &&
+    operation.position === "after" &&
+    isLastEntry;
   const markers = [
-    removed ? theme.fg("error", "[removed] ") : "",
-    edits.length > 0 ? theme.fg("warning", "[edited] ") : "",
-    before ? theme.fg("accent", "[+ before] ") : "",
-    after ? theme.fg("accent", "[+ after] ") : "",
+    removed ? theme.fg("error", "[remove] ") : "",
+    edits.length > 0 ? theme.fg("warning", "[edit] ") : "",
+    before ? theme.fg("accent", "[insert before] ") : "",
+    after ? theme.fg("accent", "[insert after] ") : "",
   ];
   return { edits, marker: markers.join("") };
 }
@@ -429,7 +408,7 @@ function editorHelpLine(
       : state.flow === "exit-confirm"
         ? "Exit menu: Yes save · No keep editing · No abandon"
         : state.editMode
-          ? "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u undo"
+          ? "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u unstage"
           : "Tree editor: Tab edit mode · Escape exit /tree";
   return truncateToWidth(`  ${line}`, Math.max(1, width));
 }
@@ -472,6 +451,67 @@ function isActivePathEntry(entryId: string): boolean {
   return onPath;
 }
 
+type StagedOperation = ReturnType<typeof selectorState>["operations"][number];
+
+type LogicalUnitLike = ReturnType<typeof buildLogicalUnits>["units"][number];
+
+function logicalUnitForEntry(entryId: string): LogicalUnitLike | undefined {
+  const manager = getManager();
+  if (!manager) return undefined;
+  const path = activePath(manager.getEntries(), manager.getLeafId());
+  return buildLogicalUnits(path).units.find((unit) =>
+    unit.entryIds.includes(entryId),
+  );
+}
+
+function operationTargetsUnit(
+  operation: StagedOperation,
+  unit: LogicalUnitLike | undefined,
+  entryId: string,
+): boolean {
+  const entryIds = unit?.entryIds ?? [entryId];
+  if (operation.kind === "edit-text") {
+    return entryIds.includes(operation.entryId);
+  }
+  const targetId =
+    operation.kind === "remove-unit"
+      ? operation.unitId
+      : operation.anchorUnitId;
+  return targetId === (unit?.id ?? entryId) || entryIds.includes(targetId);
+}
+
+function replaceOperationForUnit(
+  state: ReturnType<typeof selectorState>,
+  unit: LogicalUnitLike | undefined,
+  entryId: string,
+  operation: StagedOperation,
+): void {
+  state.operations = state.operations.filter(
+    (candidate) => !operationTargetsUnit(candidate, unit, entryId),
+  );
+  state.operations.push(operation);
+}
+
+function unstageSelected(
+  state: ReturnType<typeof selectorState>,
+  entryId: string,
+): void {
+  const unit = logicalUnitForEntry(entryId);
+  const previousCount = state.operations.length;
+  state.operations = state.operations.filter(
+    (operation) => !operationTargetsUnit(operation, unit, entryId),
+  );
+  if (state.operations.length === previousCount) {
+    getExtensionContext()?.ui.notify(
+      "No staged action for the selected tree item",
+      "info",
+    );
+    return;
+  }
+  if (state.operations.length === 0) state.snapshot = undefined;
+  getExtensionContext()?.ui.notify("Selected tree action unstaged", "info");
+}
+
 function toggleRemoval(
   state: ReturnType<typeof selectorState>,
   entryId: string,
@@ -485,12 +525,24 @@ function toggleRemoval(
     candidate.entryIds.includes(entryId),
   );
   const unitId = unit?.id ?? entryId;
-  const existing = state.operations.findIndex(
+  const existing = state.operations.some(
     (operation) =>
-      operation.kind === "remove-unit" && operation.unitId === unitId,
+      operation.kind === "remove-unit" &&
+      operationTargetsUnit(operation, unit, entryId),
   );
-  if (existing >= 0) state.operations.splice(existing, 1);
-  else state.operations.push({ kind: "remove-unit", unitId });
+  if (existing) {
+    state.operations = state.operations.filter(
+      (operation) => !operationTargetsUnit(operation, unit, entryId),
+    );
+    if (state.operations.length === 0) state.snapshot = undefined;
+    getExtensionContext()?.ui.notify("Tree unit removal unstaged", "info");
+    return;
+  }
+  replaceOperationForUnit(state, unit, entryId, {
+    kind: "remove-unit",
+    unitId,
+  });
+  getExtensionContext()?.ui.notify("Tree unit removal staged", "info");
 }
 
 async function insertNote(
@@ -512,9 +564,11 @@ async function insertNote(
         return false;
       }
       snapshotIfNeeded(state);
-      state.operations.push({
+      const unit = logicalUnitForEntry(anchorEntryId);
+      const anchorUnitId = unit?.id ?? anchorEntryId;
+      replaceOperationForUnit(state, unit, anchorEntryId, {
         kind: "insert-note",
-        anchorUnitId: anchorEntryId,
+        anchorUnitId,
         position,
         text,
       });
@@ -539,13 +593,23 @@ async function editEntry(
     return;
   }
   const startBlock = (block: (typeof blocks)[number]) => {
+    const unit = logicalUnitForEntry(entry.id);
+    const existing = state.operations.find((operation) =>
+      operationTargetsUnit(operation, unit, entry.id),
+    );
+    const prefill =
+      existing?.kind === "edit-text" &&
+      existing.entryId === entry.id &&
+      (existing.blockIndex ?? 0) === block.blockIndex
+        ? existing.text
+        : block.text;
     startInlineEdit(
       selector,
       state,
-      block.text,
+      prefill,
       (text) => {
         snapshotIfNeeded(state);
-        state.operations.push({
+        replaceOperationForUnit(state, unit, entry.id, {
           kind: "edit-text",
           entryId: entry.id,
           blockIndex: block.blockIndex,

@@ -33,7 +33,7 @@ Tested against Pi 0.84.1. Compatible future Pi versions must provide the require
 Open `/tree`, then press `Tab` to enter tree-editor mode. Native tree navigation, search, filtering, folding, labels, and copy behavior remain available.
 
 ```text
-s save · e edit · d remove · a after · Shift+A before · u undo
+s save · e edit · d remove · a after · Shift+A before · u unstage
 Escape exits directly when unchanged, or opens the staged-change save menu
 ```
 
@@ -41,7 +41,7 @@ Escape exits directly when unchanged, or opens the staged-change save menu
 - `d` stages or unstages removal of a logical unit.
 - `a` inserts a visible context note after the selected unit.
 - `Shift+A` inserts a visible context note before the selected unit.
-- `u` undoes the latest staged operation.
+- `u` unstages the selected logical unit or anchor action.
 - `s` opens a save menu showing the staged item count. `Yes` applies (default); `Cancel` keeps editing.
 - `Escape` cancels inline input. With no staged changes it exits `/tree`; with staged changes it opens `Save changes to N staged item(s)?` (defaulting to the first option):
   - `Yes, and return to conversation` applies the staged changes.
@@ -50,7 +50,7 @@ Escape exits directly when unchanged, or opens the staged-change save menu
 
 Escape selects the second option.
 
-Staged rows show edited and removed markers, and annotate inserted notes at their anchor when native display capabilities allow it. Undo removes the corresponding marker. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter. Escape returns to the tree without applying or discarding staged changes. Planning or apply failures leave staged work available for correction or retry.
+Staged rows show present-tense edit, remove, and insert markers, and annotate inserted notes at their anchor when native display capabilities allow it. Staging another action on a logical unit replaces its prior action; `u` removes the selected unit's staged action. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter. Escape returns to the tree without applying or discarding staged changes. Planning or apply failures leave staged work available for correction or retry.
 
 ### Multiline input
 
