@@ -10,7 +10,10 @@ import {
 
 afterEach(() => clearSessionState());
 
-async function selectorFor(model = true) {
+async function selectorFor(
+  model = true,
+  message: Record<string, unknown> = { role: "user", content: "anchor" },
+) {
   await installNativeHooks();
   const treeSelectorUrl = new URL(
     "./modes/interactive/components/tree-selector.js",
@@ -26,10 +29,9 @@ async function selectorFor(model = true) {
   const { TreeSelectorComponent } = await import(treeSelectorUrl);
   const manager = SessionManager.inMemory("/tmp/pi-tree-editor-role-ui-test");
   const leafId = manager.appendMessage({
-    role: "user",
-    content: "anchor",
+    ...message,
     timestamp: 1,
-  });
+  } as never);
   setActiveMode({
     sessionManager: manager,
     session: model
@@ -117,6 +119,162 @@ describe("role-based staged rows", () => {
     expect(selectorState(saveSelector).flow).toBeUndefined();
     saveSelector.handleInput("\u0013");
     expect(selectorState(saveSelector).flow).toBe("save-review");
+  });
+
+  it("offers the exact provider-signed answer override and stages an unsigned copy", async () => {
+    const { selector } = await selectorFor(true, {
+      role: "assistant",
+      content: [{ type: "text", text: "signed answer", textSignature: "sig" }],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+    });
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    expect(selectorState(selector).flow).toBe("signed-override");
+    const menu = selector.render(100).join("\n");
+    expect(menu).toContain(
+      "This block is provider-signed and cannot be edited safely. Edit it anyways?",
+    );
+    expect(menu).toContain("→ No. Return to tree");
+    expect(menu).toContain("  Yes. Create an unsigned editable copy");
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).operations).toHaveLength(0);
+
+    selector.handleInput("e");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    selector.handleInput("e");
+    selector.handleInput("\u001b[B");
+    selector.handleInput("\r");
+    setInlineText(selector, "signed answer");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-unsigned",
+        entryId: selector.getTreeList().getSelectedNode().entry.id,
+        blockIndex: 0,
+        blockType: "text",
+        text: "signed answer",
+      },
+    ]);
+    expect(selector.render(100).join("\n")).toContain("[edit unsigned]");
+    selector.handleInput("u");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(selector.render(100).join("\n")).not.toContain("[edit unsigned]");
+  });
+
+  it("keeps unsigned answer editing safe while unsigned reasoning stays read-only", async () => {
+    const { selector, manager, leafId } = await selectorFor(true, {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "unsigned thought" },
+        { type: "text", text: "answer" },
+        {
+          type: "text",
+          text: "signed answer",
+          textSignature: "sig",
+        },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+    });
+    const original = structuredClone(manager.getEntries());
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    expect(selector.render(100).join("\n")).toContain(
+      "1: Answer text — answer",
+    );
+    selector.handleInput("1");
+    setInlineText(selector, "changed answer");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 1,
+        text: "changed answer",
+      },
+    ]);
+    expect(selector.render(100).join("\n")).toContain("[edit]");
+    expect(selector.render(100).join("\n")).not.toContain("[edit unsigned]");
+    expect(manager.getEntries()).toEqual(original);
+
+    selector.handleInput("u");
+    selector.handleInput("e");
+    expect(selector.render(100).join("\n")).toContain(
+      "3: Reasoning — unsigned thought (read-only: provider-signed)",
+    );
+    selector.handleInput("3");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(selectorState(selector).flow).toBeUndefined();
+  });
+
+  it("allows an unsigned answer beside signed reasoning", async () => {
+    const { selector, leafId } = await selectorFor(true, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "answer" },
+        {
+          type: "thinking",
+          thinking: "signed thought",
+          thinkingSignature: "sig",
+        },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+    });
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    selector.handleInput("1");
+    setInlineText(selector, "changed answer");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 0,
+        text: "changed answer",
+      },
+    ]);
+    expect(selector.render(100).join("\n")).toContain("[edit]");
+    expect(selector.render(100).join("\n")).not.toContain("[edit unsigned]");
+  });
+
+  it("offers the same unsigned-copy menu for directly signed reasoning", async () => {
+    const { selector } = await selectorFor(true, {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "signed thought",
+          thinkingSignature: "sig",
+        },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+    });
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    expect(selectorState(selector).flow).toBe("signed-override");
+    expect(selector.render(100).join("\n")).toContain(
+      "This block is provider-signed and cannot be edited safely. Edit it anyways?",
+    );
+    selector.handleInput("\u001b[B");
+    selector.handleInput("\r");
+    setInlineText(selector, "new thought");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations[0]).toMatchObject({
+      kind: "edit-unsigned",
+      blockType: "thinking",
+      text: "new thought",
+    });
+    expect(selector.render(100).join("\n")).toContain(
+      "[edit reasoning unsigned]",
+    );
   });
 
   it("cancels role and numbered block choosers with Escape", async () => {

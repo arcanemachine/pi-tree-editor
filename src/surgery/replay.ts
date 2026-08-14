@@ -189,6 +189,9 @@ export async function applySurgery(
               kind: operation.kind,
               entryId: operation.entryId,
               blockIndex: operation.blockIndex,
+              textLength: operation.text.length,
+              contentLength: operation.text.length,
+              signatureDetached: false,
             }
           : operation.kind === "edit-reasoning"
             ? {
@@ -196,25 +199,41 @@ export async function applySurgery(
                 entryId: operation.entryId,
                 blockIndex: operation.blockIndex,
                 thinkingLength: operation.thinking.length,
+                contentLength: operation.thinking.length,
                 removesBlock: operation.thinking.trim().length === 0,
+                signatureDetached: false,
               }
-            : operation.kind === "insert-note"
+            : operation.kind === "edit-unsigned"
               ? {
-                  kind: "insert",
-                  role: "context",
-                  anchorUnitId: operation.anchorUnitId,
-                  position: operation.position,
+                  kind: operation.kind,
+                  entryId: operation.entryId,
+                  blockIndex: operation.blockIndex,
+                  blockType: operation.blockType,
+                  signatureDetachType: operation.blockType,
                   textLength: operation.text.length,
+                  contentLength: operation.text.length,
+                  signatureDetached: true,
+                  removesBlock:
+                    operation.blockType === "thinking" &&
+                    operation.text.trim().length === 0,
                 }
-              : operation.kind === "insert"
+              : operation.kind === "insert-note"
                 ? {
-                    kind: operation.kind,
-                    role: operation.role,
+                    kind: "insert",
+                    role: "context",
                     anchorUnitId: operation.anchorUnitId,
                     position: operation.position,
                     textLength: operation.text.length,
                   }
-                : operation,
+                : operation.kind === "insert"
+                  ? {
+                      kind: operation.kind,
+                      role: operation.role,
+                      anchorUnitId: operation.anchorUnitId,
+                      position: operation.position,
+                      textLength: operation.text.length,
+                    }
+                  : operation,
       ),
       oldToNew,
       removedEntryIds: plan.removedEntryIds,

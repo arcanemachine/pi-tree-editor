@@ -181,6 +181,66 @@ describe("applySurgery", () => {
     ]);
   });
 
+  it("detaches a signed block append-only and sanitizes audit data", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "assistant",
+        parentId: null,
+        timestamp: "old",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "signed answer", textSignature: "secret" },
+            {
+              type: "thinking",
+              thinking: "keep",
+              thinkingSignature: "keep-secret",
+            },
+          ],
+          stopReason: "stop",
+        },
+      },
+    ] as SessionEntryLike[];
+    const before = structuredClone(entries);
+    const manager = new FakeManager(entries, "assistant");
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "edit-unsigned",
+          entryId: "assistant",
+          blockIndex: 0,
+          blockType: "text",
+          text: "signed answer",
+        },
+      ],
+    });
+    const result = await applySurgery(manager, plan);
+    expect(manager.entries.find((entry) => entry.id === "assistant")).toEqual(
+      before[0],
+    );
+    expect(
+      (
+        manager.entries.find((entry) => entry.id === "new-1")?.message as {
+          content: unknown;
+        }
+      ).content,
+    ).toEqual([
+      { type: "text", text: "signed answer" },
+      { type: "thinking", thinking: "keep", thinkingSignature: "keep-secret" },
+    ]);
+    const audit = manager.entries.find(
+      (entry) => entry.id === result.auditEntryId,
+    );
+    const auditText = JSON.stringify(audit?.data);
+    expect(auditText).not.toContain("signed answer");
+    expect(auditText).not.toContain("secret");
+    expect(auditText).toContain("signatureDetached");
+    expect(auditText).toContain("future provider continuity may fail");
+  });
+
   it("forces native navigation to rebuild from the reconstructed audit leaf", async () => {
     const entries = [user("u", null, "old")];
     const manager = new FakeManager(entries, "u");

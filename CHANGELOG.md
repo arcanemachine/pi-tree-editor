@@ -8,3 +8,4 @@
 - Add selector-local help, review, exit confirmation, and multi-block selection without replacing the native tree.
 - Keep native long-message navigation and horizontal viewport rendering unchanged.
 - Add role-specific staged user, assistant, and context rows with append-only replay and native viewport geometry.
+- Allow safe per-block assistant text edits beside signed blocks and provide an explicit unsigned-copy path for directly signed text or reasoning, with provider-continuity warnings.

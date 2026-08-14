@@ -1327,11 +1327,16 @@ describe("native tree editor interaction", () => {
     );
     selector.handleInput("e");
     expect(selector.render(80).join("\n")).toContain(
-      "Reasoning — read-only (provider-signed)",
+      "Reasoning — signed thought (provider-signed)",
     );
     selector.handleInput("2");
+    expect(selectorState(selector).flow).toBe("signed-override");
+    expect(selector.render(80).join("\n")).toContain(
+      "This block is provider-signed and cannot be edited safely. Edit it anyways?",
+    );
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBeUndefined();
     expect(selectorState(selector).operations).toHaveLength(0);
-    expect(notifications.at(-1)).toContain("read-only");
   });
 
   it("stays bounded through repeated narrow multiline navigation and state changes", async () => {

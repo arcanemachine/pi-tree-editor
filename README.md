@@ -51,7 +51,17 @@ Inserted text and source edits support multiline input through Pi's native `Edit
 
 ## What can be edited
 
-`e` edits supported text blocks in user, assistant, custom-message, compaction, and branch-summary entries. Multiple text blocks are chosen individually. User images and untouched opaque/provider content remain byte-for-byte unchanged. Unsigned assistant reasoning blocks are eligible; provider-signed, redacted, tool-associated, and unsupported assistant content is read-only. Blank reasoning removes only that block when another assistant content block remains.
+`e` edits supported text blocks in user, assistant, custom-message, compaction, and branch-summary entries. Multiple text blocks are chosen individually. User images and untouched opaque/provider content remain byte-for-byte unchanged. Assistant answer text is evaluated per block: an unsigned ordinary text block remains editable even when a different recognized block carries a provider signature. Tool calls, redacted reasoning, unknown content shapes, malformed signature fields, and tool-associated assistant messages remain protected.
+
+Reasoning editing remains stricter: the target must be an unsigned, recognized, non-redacted thinking block, the assistant message must be tool-free, and no other text or reasoning block may carry a provider signature. Signed targets never use the ordinary edit operation. Selecting a directly provider-signed text or thinking block opens a selector-local confirmation:
+
+```text
+This block is provider-signed and cannot be edited safely. Edit it anyways?
+→ No. Return to tree
+  Yes. Create an unsigned editable copy
+```
+
+The default and Escape behavior are `No`. Choosing `Yes` stages an explicit unsigned-copy operation. It removes only the selected block's `textSignature` or `thinkingSignature`, preserves every other block/signature/order, and shows `[edit unsigned]` or `[edit reasoning unsigned]`. The stage warning explains that future provider continuity may fail, including when the submitted content is unchanged. Blank reasoning removes only that block when another assistant content block remains; removing a sole content block is refused.
 
 ## Safety model
 
@@ -61,16 +71,16 @@ Edits use append-only, same-session, copy-on-write reconstruction:
 - Display-only staged rows are fresh in-memory nodes; no staged insert is appended before confirmation.
 - Only the affected suffix is reconstructed; the unchanged prefix is retained.
 - The reconstructed suffix receives fresh entry IDs on a new alternate branch.
-- Unedited reasoning/thinking blocks, images, opaque blocks, provider/model identity, and compaction references are preserved and validated.
-- A non-context audit entry records the reconstruction, including inserted role and text length rather than duplicate content.
+- Unedited reasoning/thinking blocks, images, opaque blocks, provider/model identity, signatures, and compaction references are preserved and validated.
+- A non-context audit entry records the reconstruction, including inserted role, block index, content length, signature-detach type/flag, and warning/count rather than duplicate content or signature values.
 - Failures return to the original branch; partial alternate entries remain unreachable.
 - Persistence is incremental, so an in-progress reconstruction is not crash-atomic.
 
-This extension does not restore files or Git state, edit tool arguments/results, rewrite JSONL, or call an LLM to summarize content.
+Unsigned copies are an explicit safety tradeoff: a future provider may reject the detached block or lose continuity. This extension does not restore files or Git state, edit tool arguments/results, rewrite JSONL, or call an LLM to summarize content.
 
 ## Graceful fallback
 
-If native capabilities are missing or a hook cannot be installed, pi-tree-editor warns once with an actionable reason and leaves Pi's native `/tree` behavior available unchanged. Unsupported assistant insertion identity and unsafe virtual-row capabilities fail closed without mutating the session.
+If native capabilities are missing or a hook cannot be installed, pi-tree-editor warns once with an actionable reason and leaves Pi's native `/tree` behavior available unchanged. Unsupported assistant insertion identity, unsafe unsigned-copy targets, and unsafe virtual-row capabilities fail closed without mutating the session.
 
 ## Development
 

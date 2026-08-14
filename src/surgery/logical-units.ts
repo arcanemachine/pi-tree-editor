@@ -131,17 +131,30 @@ export function buildLogicalUnits(path: SessionEntryLike[]): {
   return { units, issues };
 }
 
+export type BlockEligibilityReason =
+  | "provider-signed"
+  | "redacted"
+  | "tool-associated"
+  | "unsupported";
+
 export type ReasoningBlockLocation = {
   entryId: string;
   blockIndex: number;
   text: string;
   safe: boolean;
-  reason?: "provider-signed" | "redacted" | "tool-associated" | "unsupported";
+  reason?: BlockEligibilityReason;
+  signedTarget?: boolean;
 };
 
 export type ReasoningEligibility = {
   eligible: boolean;
-  reason?: ReasoningBlockLocation["reason"];
+  reason?: BlockEligibilityReason;
+};
+
+export type TextBlockEligibility = {
+  eligible: boolean;
+  reason?: BlockEligibilityReason;
+  signedTarget?: boolean;
 };
 
 function assistantContent(entry: SessionEntryLike): unknown[] | undefined {
@@ -151,6 +164,41 @@ function assistantContent(entry: SessionEntryLike): unknown[] | undefined {
     return undefined;
   }
   return message.content;
+}
+
+function signaturePresent(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+function assistantBlockIssue(
+  content: unknown[],
+): BlockEligibilityReason | undefined {
+  for (const block of content) {
+    if (!isObject(block) || typeof block.type !== "string") {
+      return "unsupported";
+    }
+    if (block.type === "thinking") {
+      if (typeof block.thinking !== "string") return "unsupported";
+      if (
+        "thinkingSignature" in block &&
+        typeof block.thinkingSignature !== "string"
+      ) {
+        return "unsupported";
+      }
+      if (block.redacted === true) return "redacted";
+      continue;
+    }
+    if (block.type === "text") {
+      if (typeof block.text !== "string") return "unsupported";
+      if ("textSignature" in block && typeof block.textSignature !== "string") {
+        return "unsupported";
+      }
+      continue;
+    }
+    if (block.type === "toolCall") return "tool-associated";
+    return "unsupported";
+  }
+  return undefined;
 }
 
 export function reasoningEligibility(
@@ -164,35 +212,82 @@ export function reasoningEligibility(
   }
   const content = assistantContent(entry);
   if (!content) return { eligible: false, reason: "unsupported" };
+  const issue = assistantBlockIssue(content);
+  if (issue) return { eligible: false, reason: issue };
   for (const block of content) {
-    if (!isObject(block) || typeof block.type !== "string") {
-      return { eligible: false, reason: "unsupported" };
+    if (
+      isObject(block) &&
+      ((block.type === "thinking" &&
+        signaturePresent(block.thinkingSignature)) ||
+        (block.type === "text" && signaturePresent(block.textSignature)))
+    ) {
+      return { eligible: false, reason: "provider-signed" };
     }
-    if (block.type === "thinking") {
-      if (typeof block.thinking !== "string") {
-        return { eligible: false, reason: "unsupported" };
-      }
-      if (block.redacted === true) {
-        return { eligible: false, reason: "redacted" };
-      }
-      if ("thinkingSignature" in block) {
-        return { eligible: false, reason: "provider-signed" };
-      }
-      continue;
-    }
-    if (block.type === "text") {
-      if (typeof block.text !== "string") {
-        return { eligible: false, reason: "unsupported" };
-      }
-      if ("textSignature" in block) {
-        return { eligible: false, reason: "provider-signed" };
-      }
-      continue;
-    }
-    if (block.type === "toolCall") {
-      return { eligible: false, reason: "tool-associated" };
-    }
+  }
+  return { eligible: true };
+}
+
+function assistantBlockAt(
+  entry: SessionEntryLike,
+  blockIndex: number,
+): Record<string, unknown> | undefined {
+  const content = assistantContent(entry);
+  const block = content?.[blockIndex];
+  return isObject(block) ? block : undefined;
+}
+
+export function textBlockEligibility(
+  entry: SessionEntryLike,
+  blockIndex: number,
+): TextBlockEligibility {
+  const blocks = editableTextBlocks(entry);
+  const target = blocks.find((block) => block.blockIndex === blockIndex);
+  if (!target) return { eligible: false, reason: "unsupported" };
+  const msg = message(entry);
+  if (!msg || msg.role !== "assistant") return { eligible: true };
+  if (typeof msg.content === "string") return { eligible: true };
+  const content = assistantContent(entry);
+  if (!content) return { eligible: false, reason: "unsupported" };
+  const issue = assistantBlockIssue(content);
+  if (issue) return { eligible: false, reason: issue };
+  const block = assistantBlockAt(entry, blockIndex);
+  if (!block || block.type !== "text" || typeof block.text !== "string") {
     return { eligible: false, reason: "unsupported" };
+  }
+  const signedTarget = signaturePresent(block.textSignature);
+  return signedTarget
+    ? { eligible: false, reason: "provider-signed", signedTarget: true }
+    : { eligible: true };
+}
+
+export function reasoningBlockEligibility(
+  entry: SessionEntryLike,
+  blockIndex: number,
+): ReasoningEligibility & { signedTarget?: boolean } {
+  const content = assistantContent(entry);
+  const block = assistantBlockAt(entry, blockIndex);
+  if (!content || !block || block.type !== "thinking") {
+    return { eligible: false, reason: "unsupported" };
+  }
+  if (typeof block.thinking !== "string") {
+    return { eligible: false, reason: "unsupported" };
+  }
+  const issue = assistantBlockIssue(content);
+  if (issue) return { eligible: false, reason: issue };
+  const signedTarget = signaturePresent(block.thinkingSignature);
+  if (signedTarget) {
+    return { eligible: false, reason: "provider-signed", signedTarget: true };
+  }
+  for (const candidate of content) {
+    if (
+      isObject(candidate) &&
+      ((candidate.type === "thinking" &&
+        signaturePresent(candidate.thinkingSignature)) ||
+        (candidate.type === "text" &&
+          signaturePresent(candidate.textSignature)))
+    ) {
+      return { eligible: false, reason: "provider-signed" };
+    }
   }
   return { eligible: true };
 }
@@ -202,22 +297,26 @@ export function reasoningBlocks(
 ): ReasoningBlockLocation[] {
   const content = assistantContent(entry);
   if (!content) return [];
-  const eligibility = reasoningEligibility(entry);
-  return content.flatMap((block, blockIndex) =>
-    isObject(block) &&
-    block.type === "thinking" &&
-    typeof block.thinking === "string"
-      ? [
-          {
-            entryId: entry.id,
-            blockIndex,
-            text: block.thinking,
-            safe: eligibility.eligible,
-            reason: eligibility.reason,
-          },
-        ]
-      : [],
-  );
+  return content.flatMap((block, blockIndex) => {
+    if (
+      !isObject(block) ||
+      block.type !== "thinking" ||
+      typeof block.thinking !== "string"
+    ) {
+      return [];
+    }
+    const eligibility = reasoningBlockEligibility(entry, blockIndex);
+    return [
+      {
+        entryId: entry.id,
+        blockIndex,
+        text: block.thinking,
+        safe: eligibility.eligible,
+        reason: eligibility.reason,
+        signedTarget: eligibility.signedTarget,
+      },
+    ];
+  });
 }
 
 export function editableTextBlocks(
@@ -274,15 +373,6 @@ export function assertEditable(entry: SessionEntryLike): void {
     );
   }
   const msg = message(entry);
-  if (msg?.role === "assistant") {
-    const eligibility = reasoningEligibility(entry);
-    if (!eligibility.eligible) {
-      throw new SurgeryError(
-        "REASONING_PROTECTED",
-        `Assistant content is read-only (${eligibility.reason ?? "unsupported"})`,
-      );
-    }
-  }
   if (msg?.role === "toolResult") {
     throw new SurgeryError(
       "TOOL_CONTENT_PROTECTED",

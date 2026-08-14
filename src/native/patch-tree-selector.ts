@@ -5,7 +5,7 @@ import {
   buildLogicalUnits,
   editableTextBlocks,
   reasoningBlocks,
-  reasoningEligibility,
+  textBlockEligibility,
 } from "../surgery/logical-units.js";
 import {
   Container,
@@ -16,7 +16,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import * as PiTui from "@earendil-works/pi-tui";
-import type { SessionEntryLike } from "../surgery/types.js";
+import { isObject, type SessionEntryLike } from "../surgery/types.js";
 import type { SessionManagerAdapter } from "../surgery/replay.js";
 import {
   getActiveMode,
@@ -323,8 +323,12 @@ function patchTreeListDisplay(
 }
 
 type DisplayAnnotations = {
-  edits: Array<{ text: string; blockIndex?: number }>;
-  reasoningEdits: Array<{ thinking: string; blockIndex: number }>;
+  edits: Array<{ text: string; blockIndex?: number; unsigned?: boolean }>;
+  reasoningEdits: Array<{
+    thinking: string;
+    blockIndex: number;
+    unsigned?: boolean;
+  }>;
   reasoningPreview: string;
   marker: string;
 };
@@ -578,15 +582,25 @@ function isCtrlS(keyData: string): boolean {
 function cloneDisplayNode(
   node: unknown,
   entry: SessionEntryLike,
-  edits: Array<{ text: string; blockIndex?: number }>,
-  reasoningEdits: Array<{ thinking: string; blockIndex: number }>,
+  edits: Array<{ text: string; blockIndex?: number; unsigned?: boolean }>,
+  reasoningEdits: Array<{
+    thinking: string;
+    blockIndex: number;
+    unsigned?: boolean;
+  }>,
 ): unknown {
   const clonedEntry = structuredClone(entry) as SessionEntryLike;
   for (const edit of edits) {
     applyDisplayEdit(clonedEntry, edit.text, edit.blockIndex);
+    if (edit.unsigned) {
+      removeDisplaySignature(clonedEntry, edit.blockIndex ?? 0, "text");
+    }
   }
   for (const edit of reasoningEdits) {
     applyDisplayReasoningEdit(clonedEntry, edit.thinking, edit.blockIndex);
+    if (edit.unsigned) {
+      removeDisplaySignature(clonedEntry, edit.blockIndex, "thinking");
+    }
   }
   return { ...(node as Record<string, unknown>), entry: clonedEntry };
 }
@@ -660,6 +674,27 @@ function applyDisplayReasoningEdit(
   });
 }
 
+function removeDisplaySignature(
+  entry: SessionEntryLike,
+  blockIndex: number,
+  blockType: "text" | "thinking",
+): void {
+  if (
+    entry.type !== "message" ||
+    !entry.message ||
+    typeof entry.message !== "object" ||
+    !Array.isArray((entry.message as Record<string, unknown>).content)
+  ) {
+    return;
+  }
+  const content = (entry.message as Record<string, unknown>)
+    .content as unknown[];
+  const block = content[blockIndex];
+  if (!isObject(block) || block.type !== blockType) return;
+  if (blockType === "text") delete block.textSignature;
+  else delete block.thinkingSignature;
+}
+
 function displayAnnotations(
   entry: SessionEntryLike,
   state: ReturnType<typeof selectorState>,
@@ -669,14 +704,34 @@ function displayAnnotations(
   const operation = state.operations.find((candidate) =>
     operationTargetsUnit(candidate, unit, entry.id),
   );
-  const edits =
+  const edits: DisplayAnnotations["edits"] =
     operation?.kind === "edit-text" && operation.entryId === entry.id
       ? [{ text: operation.text, blockIndex: operation.blockIndex }]
-      : [];
-  const reasoningEdits =
+      : operation?.kind === "edit-unsigned" &&
+          operation.entryId === entry.id &&
+          operation.blockType === "text"
+        ? [
+            {
+              text: operation.text,
+              blockIndex: operation.blockIndex,
+              unsigned: true,
+            },
+          ]
+        : [];
+  const reasoningEdits: DisplayAnnotations["reasoningEdits"] =
     operation?.kind === "edit-reasoning" && operation.entryId === entry.id
       ? [{ thinking: operation.thinking, blockIndex: operation.blockIndex }]
-      : [];
+      : operation?.kind === "edit-unsigned" &&
+          operation.entryId === entry.id &&
+          operation.blockType === "thinking"
+        ? [
+            {
+              thinking: operation.text,
+              blockIndex: operation.blockIndex,
+              unsigned: true,
+            },
+          ]
+        : [];
   const isFirstEntry = (unit?.entryIds[0] ?? entry.id) === entry.id;
   const isLastEntry = (unit?.entryIds.at(-1) ?? entry.id) === entry.id;
   const removed = operation?.kind === "remove-unit";
@@ -711,10 +766,17 @@ function displayAnnotations(
           : `[reasoning: ${reasoningPreviewText(previewBlock)}] `,
       )
     : "";
+  const unsignedText = edits.some((edit) => edit.unsigned);
+  const unsignedReasoning = reasoningEdits.some((edit) => edit.unsigned);
   const markers = [
     removed ? theme.fg("error", "[remove] ") : "",
-    edits.length > 0 ? theme.fg("warning", "[edit] ") : "",
-    reasoningEdits.length > 0 ? theme.fg("warning", "[edit reasoning] ") : "",
+    unsignedText ? theme.fg("warning", "[edit unsigned] ") : "",
+    !unsignedText && edits.length > 0 ? theme.fg("warning", "[edit] ") : "",
+    unsignedReasoning
+      ? theme.fg("warning", "[edit reasoning unsigned] ")
+      : !unsignedText && reasoningEdits.length > 0
+        ? theme.fg("warning", "[edit reasoning] ")
+        : "",
     before ? theme.fg("accent", "[insert before] ") : "",
     after ? theme.fg("accent", "[insert after] ") : "",
   ];
@@ -851,7 +913,11 @@ function operationTargetsUnit(
   entryId: string,
 ): boolean {
   const entryIds = unit?.entryIds ?? [entryId];
-  if (operation.kind === "edit-text" || operation.kind === "edit-reasoning") {
+  if (
+    operation.kind === "edit-text" ||
+    operation.kind === "edit-reasoning" ||
+    operation.kind === "edit-unsigned"
+  ) {
     return entryIds.includes(operation.entryId);
   }
   const targetId =
@@ -1141,9 +1207,12 @@ function canUseMultilineEditor(): boolean {
 
 type EditChoice = {
   kind: "text" | "reasoning";
+  blockType: "text" | "thinking";
   blockIndex: number;
   text: string;
   safe: boolean;
+  signedTarget?: boolean;
+  reason?: string;
   label: string;
 };
 
@@ -1155,34 +1224,41 @@ async function editEntry(
 ): Promise<void> {
   const ctx = getExtensionContext();
   if (!ctx?.hasUI) return;
-  const textBlocks = editableTextBlocks(entry);
-  const reasoning = reasoningBlocks(entry);
-  const message =
-    entry.type === "message" &&
-    entry.message &&
-    typeof entry.message === "object"
-      ? (entry.message as { role?: unknown })
-      : undefined;
-  const isAssistant = message?.role === "assistant";
-  const eligibility = isAssistant ? reasoningEligibility(entry) : undefined;
-  const messageSafe = !isAssistant || eligibility?.eligible === true;
   const choices: EditChoice[] = [
-    ...textBlocks.map((block) => ({
-      kind: "text" as const,
-      blockIndex: block.blockIndex,
-      text: block.text,
-      safe: messageSafe,
-      label: `Answer text — ${previewChoiceText(block.text)}`,
-    })),
-    ...reasoning.map((block) => ({
+    ...editableTextBlocks(entry).map((block) => {
+      const eligibility = textBlockEligibility(entry, block.blockIndex);
+      return {
+        kind: "text" as const,
+        blockType: "text" as const,
+        blockIndex: block.blockIndex,
+        text: block.text,
+        safe: eligibility.eligible,
+        signedTarget: eligibility.signedTarget,
+        reason: eligibility.reason,
+        label: `Answer text — ${previewChoiceText(block.text)}${
+          eligibility.signedTarget
+            ? " (provider-signed)"
+            : eligibility.reason
+              ? ` (read-only: ${eligibility.reason})`
+              : ""
+        }`,
+      };
+    }),
+    ...reasoningBlocks(entry).map((block) => ({
       kind: "reasoning" as const,
+      blockType: "thinking" as const,
       blockIndex: block.blockIndex,
       text: block.text,
-      safe: block.safe && messageSafe,
-      label:
-        block.safe && messageSafe
-          ? `Reasoning — ${previewChoiceText(block.text)}`
-          : `Reasoning — read-only (${eligibility?.reason ?? block.reason ?? "unsupported"})`,
+      safe: block.safe,
+      signedTarget: block.signedTarget,
+      reason: block.reason,
+      label: `Reasoning — ${previewChoiceText(block.text)}${
+        block.signedTarget
+          ? " (provider-signed)"
+          : block.safe
+            ? ""
+            : ` (read-only: ${block.reason ?? "unsupported"})`
+      }`,
     })),
   ];
   if (choices.length === 0) {
@@ -1193,14 +1269,18 @@ async function editEntry(
     return;
   }
   const startChoice = (choice: EditChoice) => {
+    const unit = logicalUnitForEntry(entry.id);
+    if (choice.signedTarget) {
+      showSignedOverride(selector, state, entry, unit, choice, list);
+      return;
+    }
     if (!choice.safe) {
       ctx.ui.notify(
-        `This entry is read-only (${eligibility?.reason ?? "unsupported"})`,
+        `This entry is read-only (${choice.reason ?? "unsupported"})`,
         "warning",
       );
       return;
     }
-    const unit = logicalUnitForEntry(entry.id);
     const existing = state.operations.find((operation) =>
       operationTargetsUnit(operation, unit, entry.id),
     );
@@ -1215,7 +1295,12 @@ async function editEntry(
             existing.entryId === entry.id &&
             existing.blockIndex === choice.blockIndex
           ? existing.thinking
-          : choice.text;
+          : existing?.kind === "edit-unsigned" &&
+              existing.entryId === entry.id &&
+              existing.blockIndex === choice.blockIndex &&
+              existing.blockType === choice.blockType
+            ? existing.text
+            : choice.text;
     startInlineEdit(
       selector,
       state,
@@ -1260,7 +1345,7 @@ async function editEntry(
       choice.kind === "reasoning",
     );
   };
-  if (choices.length === 1 && choices[0]!.safe) {
+  if (choices.length === 1 && (choices[0]!.safe || choices[0]!.signedTarget)) {
     startChoice(choices[0]!);
     return;
   }
@@ -1285,6 +1370,69 @@ async function editEntry(
     () => undefined,
     () => undefined,
   );
+}
+
+function showSignedOverride(
+  selector: SelectorLike,
+  state: ReturnType<typeof selectorState>,
+  entry: SessionEntryLike,
+  unit: LogicalUnitLike | undefined,
+  choice: EditChoice,
+  list: TreeListLike | undefined,
+): void {
+  const shown = showChoiceMenu(
+    selector,
+    state,
+    list,
+    "signed-override",
+    "This block is provider-signed and cannot be edited safely. Edit it anyways?",
+    [
+      { value: "no", label: "No. Return to tree" },
+      { value: "yes", label: "Yes. Create an unsigned editable copy" },
+    ],
+    0,
+    (value) => {
+      if (value !== "yes") return;
+      const ctx = getExtensionContext();
+      if (!ctx?.hasUI) return;
+      const blockType = choice.blockType;
+      startInlineEdit(
+        selector,
+        state,
+        choice.text,
+        (text) => {
+          if (
+            blockType === "thinking" &&
+            text.trim().length === 0 &&
+            isSoleReasoningBlock(entry, choice.blockIndex)
+          ) {
+            ctx.ui.notify(
+              "Cannot remove the only content block from an assistant entry",
+              "warning",
+            );
+            return false;
+          }
+          snapshotIfNeeded(state);
+          replaceOperationForUnit(state, unit, entry.id, {
+            kind: "edit-unsigned",
+            entryId: entry.id,
+            blockIndex: choice.blockIndex,
+            blockType,
+            text,
+          });
+          ctx.ui.notify(
+            `Provider signature removed; future provider continuity may fail. Unsigned ${choice.kind} copy staged`,
+            "warning",
+          );
+          return true;
+        },
+        list,
+        blockType === "thinking",
+      );
+    },
+    () => undefined,
+  );
+  if (!shown) return;
 }
 
 function isSoleReasoningBlock(
@@ -1361,7 +1509,11 @@ function showFlowComponent(
 
 type ChoiceItem = { value: string; label: string };
 
-type ChoiceFlow = "save-review" | "exit-confirm" | "role-choice";
+type ChoiceFlow =
+  | "save-review"
+  | "exit-confirm"
+  | "role-choice"
+  | "signed-override";
 
 const choiceTheme = {
   selectedPrefix: (text: string) => text,

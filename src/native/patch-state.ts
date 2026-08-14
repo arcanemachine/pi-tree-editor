@@ -11,7 +11,12 @@ export type SelectorState = {
   };
   busy: boolean;
   confirmingExit: boolean;
-  flow?: "save-review" | "exit-confirm" | "block-choice" | "role-choice";
+  flow?:
+    | "save-review"
+    | "exit-confirm"
+    | "block-choice"
+    | "role-choice"
+    | "signed-override";
   flowComponent?: {
     handleInput(data: string): void;
     finish(): void;

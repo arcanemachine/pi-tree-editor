@@ -10,6 +10,7 @@ export function auditPreview(plan: SurgeryPlan): string[] {
     `Remove ${plan.removedEntryIds.length} source entr${plan.removedEntryIds.length === 1 ? "y" : "ies"}`,
     `Change ${plan.editedEntryIds.length} text entr${plan.editedEntryIds.length === 1 ? "y" : "ies"}`,
     `Change ${plan.editedReasoningEntryIds.length} reasoning entr${plan.editedReasoningEntryIds.length === 1 ? "y" : "ies"}`,
+    `Detach ${plan.unsignedDetachCount} provider signature${plan.unsignedDetachCount === 1 ? "" : "s"}`,
     `Remove ${plan.removedReasoningCount} reasoning block${plan.removedReasoningCount === 1 ? "" : "s"}`,
     `Insert ${plan.insertedEntryIds.length} staged message${plan.insertedEntryIds.length === 1 ? "" : "s"}`,
     "The original branch remains unchanged.",
