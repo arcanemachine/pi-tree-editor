@@ -67,12 +67,12 @@ Edits use append-only, same-session, copy-on-write reconstruction:
 - Existing entries and the original branch are never modified or deleted.
 - Only the affected suffix is reconstructed; the unchanged prefix is retained.
 - The reconstructed suffix receives fresh entry IDs on a new alternate branch.
-- Reasoning/thinking blocks, images, provider metadata, opaque blocks, and compaction references are preserved and validated.
+- Unedited reasoning/thinking blocks, images, opaque blocks, provider/model identity, and compaction references are preserved and validated.
 - A non-context audit entry records the reconstruction.
 - Failures return to the original branch; partial alternate entries remain unreachable.
 - Persistence is incremental, so an in-progress reconstruction is not crash-atomic.
 
-This extension does not restore files or Git state, edit tool arguments/results, rewrite JSONL, or call an LLM to summarize content. Reasoning edits are limited to unsigned assistant thinking blocks and preserve all other provider blocks and metadata.
+This extension does not restore files or Git state, edit tool arguments/results, rewrite JSONL, or call an LLM to summarize content. Reasoning edits are limited to unsigned assistant thinking blocks, preserve all other content blocks, and normalize stale assistant completion metadata.
 
 ## Graceful fallback
 
