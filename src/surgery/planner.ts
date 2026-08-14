@@ -744,7 +744,7 @@ function buildCandidate(
                 item.role === "assistant"
                   ? {
                       role: "assistant",
-                      content: item.text,
+                      content: [{ type: "text", text: item.text }],
                       api: item.assistant?.api,
                       provider: item.assistant?.provider,
                       model: item.assistant?.model,

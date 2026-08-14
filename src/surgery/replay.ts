@@ -146,7 +146,7 @@ export async function applySurgery(
             );
           id = manager.appendMessage.call(manager, {
             role: "assistant",
-            content: item.text,
+            content: [{ type: "text", text: item.text }],
             api: identity.api,
             provider: identity.provider,
             model: identity.model,

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { installNativeHooks } from "../src/native/internal-imports.js";
 import {
   clearSessionState,
@@ -98,6 +99,29 @@ describe("role-based staged rows", () => {
     selector.handleInput("u");
     expect(selectorState(selector).operations).toHaveLength(0);
     expect(manager.getEntries()).toHaveLength(1);
+  });
+
+  it("keeps canonical assistant virtual rows role-correct and bounded", async () => {
+    const { selector } = await selectorFor();
+    selector.handleInput("\t");
+    selector.handleInput("a");
+    selector.handleInput("\u001b[B");
+    selector.handleInput("\r");
+    setInlineText(selector, "virtual assistant");
+    selector.handleInput("\r");
+    for (const width of [80, 32, 12]) {
+      expect(
+        selector
+          .render(width)
+          .every((line: string) => visibleWidth(line) <= width),
+      ).toBe(true);
+    }
+    selector.handleInput("\u001b[B");
+    const selected = selector.getTreeList().getSelectedNode();
+    expect(selected?.entry.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "virtual assistant" }],
+    });
   });
 
   it("uses ctrl+s only and fails closed for an unavailable assistant model", async () => {

@@ -4,6 +4,17 @@ import { applySurgery } from "../src/surgery/replay.js";
 import { planSurgery } from "../src/surgery/planner.js";
 import type { SessionEntryLike } from "../src/surgery/types.js";
 
+function zeroUsage() {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
 function user(id: string, parentId: string | null): SessionEntryLike {
   return {
     type: "message",
@@ -98,13 +109,121 @@ describe("inserted message roles", () => {
     });
     expect(inserted[1]?.message).toMatchObject({
       role: "assistant",
-      content: "inserted assistant",
+      content: [{ type: "text", text: "inserted assistant" }],
       api: "openai",
       provider: "openai",
       model: "test",
       stopReason: "stop",
     });
     expect(inserted[1]?.message).not.toHaveProperty("thinkingSignature");
+  });
+
+  it("keeps mixed assistant-after-user and user-before-assistant inserts canonical", async () => {
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-mixed-insert-order-test",
+    );
+    const userOne = manager.appendMessage({
+      role: "user",
+      content: "first user",
+      timestamp: 1,
+    });
+    const assistantOne = manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "first answer" }],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: zeroUsage(),
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const userTwo = manager.appendMessage({
+      role: "user",
+      content: "second user",
+      timestamp: 3,
+    });
+    const assistantTwo = manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "second answer" }],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: zeroUsage(),
+      stopReason: "stop",
+      timestamp: 4,
+    });
+    const before = structuredClone(manager.getEntries());
+    const plan = planSurgery({
+      entries: before as SessionEntryLike[],
+      leafId: assistantTwo,
+      operations: [
+        {
+          kind: "insert",
+          anchorUnitId: userOne,
+          position: "after",
+          role: "assistant",
+          text: "inserted answer",
+          assistant: { api: "openai", provider: "openai", model: "test" },
+        },
+        {
+          kind: "insert",
+          anchorUnitId: assistantTwo,
+          position: "before",
+          role: "user",
+          text: "inserted user",
+        },
+      ],
+    });
+    const result = await applySurgery(manager as never, plan);
+    const entries = manager.getEntries() as SessionEntryLike[];
+    const insertedAssistant = entries.find(
+      (entry) =>
+        entry.id === result.insertedEntryIds[0] &&
+        (entry.message as { role?: string })?.role === "assistant",
+    )!;
+    const insertedUser = entries.find(
+      (entry) =>
+        entry.id === result.insertedEntryIds[1] &&
+        (entry.message as { role?: string })?.role === "user",
+    )!;
+    const replayedAssistant = entries.find(
+      (entry) => entry.id === result.oldToNew[assistantTwo],
+    )!;
+    expect(insertedAssistant.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "inserted answer" }],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: zeroUsage(),
+      stopReason: "stop",
+    });
+    expect(insertedAssistant.message).not.toHaveProperty("thinking");
+    expect(insertedAssistant.message).not.toHaveProperty("thinkingSignature");
+    expect(insertedAssistant.message).not.toHaveProperty("toolCall");
+    expect(insertedAssistant.parentId).toBe(result.oldToNew[userOne]);
+    expect(insertedUser.message).toMatchObject({
+      role: "user",
+      content: "inserted user",
+    });
+    expect(insertedUser.parentId).toBe(result.oldToNew[userTwo]);
+    expect(replayedAssistant.parentId).toBe(insertedUser.id);
+    expect(entries.indexOf(insertedUser)).toBeLessThan(
+      entries.indexOf(replayedAssistant),
+    );
+    expect(entries.filter((entry) => entry.id === userOne)[0]).toEqual(
+      before.find((entry) => entry.id === userOne),
+    );
+    expect(entries.filter((entry) => entry.id === assistantOne)[0]).toEqual(
+      before.find((entry) => entry.id === assistantOne),
+    );
+    expect(manager.buildSessionContext()).toBeDefined();
+    const audit = entries.find((entry) => entry.id === result.auditEntryId);
+    const auditData = JSON.stringify(audit?.data);
+    expect(auditData).not.toContain("inserted answer");
+    expect(auditData).not.toContain("inserted user");
+    expect(auditData).toContain('"role":"assistant"');
+    expect(auditData).toContain('"textLength":15');
   });
 
   it("applies a context insert as a visible custom message", async () => {

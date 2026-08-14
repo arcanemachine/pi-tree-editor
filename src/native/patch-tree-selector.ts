@@ -505,7 +505,16 @@ function createVirtualNode(
           id,
           parentId,
           timestamp: "virtual",
-          message: { role: operation.role, content: operation.text },
+          message:
+            operation.role === "assistant"
+              ? {
+                  role: "assistant",
+                  content: [{ type: "text", text: operation.text }],
+                  api: operation.assistant?.api,
+                  provider: operation.assistant?.provider,
+                  model: operation.assistant?.model,
+                }
+              : { role: "user", content: operation.text },
         };
   const node = { entry, children: [] as [] } as VirtualNode;
   node[VIRTUAL_ROW] = {
