@@ -50,7 +50,7 @@ Escape exits directly when unchanged, or opens the staged-change save menu
 
 Escape selects the second option.
 
-Staged rows show edited and removed markers, and annotate inserted notes at their anchor when native display capabilities allow it. Undo removes the corresponding marker. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter, or Escape for Cancel. Planning or apply failures leave staged work available for correction or retry.
+Staged rows show edited and removed markers, and annotate inserted notes at their anchor when native display capabilities allow it. Undo removes the corresponding marker. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter. Escape returns to the tree without applying or discarding staged changes. Planning or apply failures leave staged work available for correction or retry.
 
 ### Multiline input
 
