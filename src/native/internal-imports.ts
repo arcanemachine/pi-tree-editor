@@ -10,6 +10,7 @@ type NativeModule = Record<string, unknown>;
 type NativeModuleLoader = () => Promise<{
   selectorModule: NativeModule;
   interactiveModule: NativeModule;
+  themeModule?: NativeModule;
 }>;
 
 let installing: Promise<boolean> | undefined;
@@ -31,9 +32,18 @@ async function install(): Promise<boolean> {
       "./modes/interactive/interactive-mode.js",
       resolved,
     ).href;
+    let themeModule: NativeModule | undefined;
+    try {
+      const themeUrl = new URL("./modes/interactive/theme/theme.js", resolved)
+        .href;
+      themeModule = (await import(themeUrl)) as NativeModule;
+    } catch {
+      themeModule = undefined;
+    }
     return {
       selectorModule: (await import(selectorUrl)) as NativeModule,
       interactiveModule: (await import(interactiveUrl)) as NativeModule,
+      themeModule,
     };
   });
 }
@@ -44,6 +54,7 @@ async function installWithLoader(loader: NativeModuleLoader): Promise<boolean> {
     return installWithModules(
       modules.selectorModule,
       modules.interactiveModule,
+      modules.themeModule,
     );
   } catch (error) {
     reportHookFailure(
@@ -56,6 +67,7 @@ async function installWithLoader(loader: NativeModuleLoader): Promise<boolean> {
 function installWithModules(
   selectorModule: NativeModule,
   interactiveModule: NativeModule,
+  themeModule?: NativeModule,
 ): boolean {
   const snapshots = snapshotPatchTargets(selectorModule, interactiveModule);
   let installed = false;
@@ -70,7 +82,7 @@ function installWithModules(
       reportHookFailure(interactiveReason);
       return false;
     }
-    if (!patchTreeSelector(selectorModule)) return false;
+    if (!patchTreeSelector(selectorModule, themeModule?.theme)) return false;
     if (!patchInteractiveMode(interactiveModule)) return false;
     installed = true;
     return true;
@@ -141,6 +153,7 @@ export async function installNativeHooksForTest(
 export function installNativeHooksWithModulesForTest(
   selectorModule: NativeModule,
   interactiveModule: NativeModule,
+  themeModule?: NativeModule,
 ): boolean {
-  return installWithModules(selectorModule, interactiveModule);
+  return installWithModules(selectorModule, interactiveModule, themeModule);
 }

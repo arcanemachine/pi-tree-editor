@@ -39,12 +39,24 @@ type SelectorLike = {
 
 type TreeListLike = {
   getSelectedNode?: () => { entry: SessionEntryLike } | undefined;
+  getEntryDisplayText?: (node: unknown, isSelected: boolean) => string;
   render?: (width: number) => string[];
   onCancel?: () => void;
   [key: string | symbol]: unknown;
 };
 
-export function patchTreeSelector(module: Record<string, unknown>): boolean {
+type DisplayTheme = {
+  fg(color: string, text: string): string;
+};
+
+const TREE_LIST_DISPLAY_PATCHED = Symbol.for(
+  "arcanemachine.pi-tree-editor.tree-list-display-patched",
+);
+
+export function patchTreeSelector(
+  module: Record<string, unknown>,
+  theme?: unknown,
+): boolean {
   const component = module.TreeSelectorComponent as
     | { prototype?: SelectorLike }
     | undefined;
@@ -64,7 +76,7 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
     return originalGetTreeList.call(this) as TreeListLike;
   };
   prototype.getTreeList = getList;
-  patchSelectorRender(prototype);
+  patchSelectorRender(prototype, getDisplayTheme(theme));
   prototype.handleInput = function (this: SelectorLike, keyData: string): void {
     if (!getHookStatus().enabled) {
       originalHandleInput.call(this, keyData);
@@ -190,7 +202,10 @@ export function patchTreeSelector(module: Record<string, unknown>): boolean {
   return true;
 }
 
-function patchSelectorRender(prototype: SelectorLike): void {
+function patchSelectorRender(
+  prototype: SelectorLike,
+  theme: DisplayTheme | undefined,
+): void {
   if (prototype[SELECTOR_RENDER_PATCHED]) return;
   const inherited = Object.getPrototypeOf(prototype) as
     | { render?: (width: number) => string[] }
@@ -200,9 +215,171 @@ function patchSelectorRender(prototype: SelectorLike): void {
   prototype.render = function (this: SelectorLike, width: number): string[] {
     if (!getHookStatus().enabled) return originalRender.call(this, width);
     patchSelectorHelp(this);
+    patchTreeListDisplay(this, selectorState(this), theme);
     return originalRender.call(this, width);
   };
   prototype[SELECTOR_RENDER_PATCHED] = true;
+}
+
+function getDisplayTheme(value: unknown): DisplayTheme | undefined {
+  return value && typeof value === "object"
+    ? (value as DisplayTheme)
+    : undefined;
+}
+
+function patchTreeListDisplay(
+  selector: SelectorLike,
+  state: ReturnType<typeof selectorState>,
+  theme: DisplayTheme | undefined,
+): void {
+  if (!theme) return;
+  try {
+    if (typeof theme.fg !== "function") return;
+  } catch {
+    return;
+  }
+  const list = selector.getTreeList?.() as TreeListLike | undefined;
+  if (!list || list[TREE_LIST_DISPLAY_PATCHED]) return;
+  const original = list.getEntryDisplayText;
+  if (typeof original !== "function") return;
+  list.getEntryDisplayText = function (
+    this: TreeListLike,
+    node: unknown,
+    isSelected: boolean,
+  ): string {
+    if (!getHookStatus().enabled) return original.call(this, node, isSelected);
+    const entry = getDisplayEntry(node);
+    if (!entry) return original.call(this, node, isSelected);
+    try {
+      const display = displayAnnotations(entry, state, theme);
+      const displayNode =
+        display.edits.length > 0
+          ? cloneDisplayNode(node, entry, display.edits)
+          : node;
+      const rendered = original.call(this, displayNode, isSelected);
+      return `${display.marker}${rendered}`;
+    } catch {
+      return original.call(this, node, isSelected);
+    }
+  };
+  list[TREE_LIST_DISPLAY_PATCHED] = true;
+}
+
+type DisplayAnnotations = {
+  edits: Array<{ text: string; blockIndex?: number }>;
+  marker: string;
+};
+
+function getDisplayEntry(node: unknown): SessionEntryLike | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  const entry = (node as { entry?: unknown }).entry;
+  return entry && typeof entry === "object"
+    ? (entry as SessionEntryLike)
+    : undefined;
+}
+
+function cloneDisplayNode(
+  node: unknown,
+  entry: SessionEntryLike,
+  edits: Array<{ text: string; blockIndex?: number }>,
+): unknown {
+  const clonedEntry = structuredClone(entry) as SessionEntryLike;
+  for (const edit of edits) {
+    applyDisplayEdit(clonedEntry, edit.text, edit.blockIndex);
+  }
+  return { ...(node as Record<string, unknown>), entry: clonedEntry };
+}
+
+function applyDisplayEdit(
+  entry: SessionEntryLike,
+  text: string,
+  blockIndex?: number,
+): void {
+  const blocks = editableTextBlocks(entry);
+  const block =
+    blocks.find((candidate) => candidate.blockIndex === blockIndex) ??
+    blocks[0];
+  if (!block) return;
+  if (block.path === "summary") {
+    entry.summary = text;
+    return;
+  }
+  if (block.path === "message") {
+    const message = entry.message as Record<string, unknown> | undefined;
+    if (!message) return;
+    const content = message.content;
+    if (typeof content === "string") {
+      message.content = text;
+    } else if (Array.isArray(content)) {
+      const candidate = content[block.blockIndex];
+      if (candidate && typeof candidate === "object") {
+        (candidate as Record<string, unknown>).text = text;
+      }
+    }
+    return;
+  }
+  const content = entry.content;
+  if (typeof content === "string") {
+    entry.content = text;
+  } else if (Array.isArray(content)) {
+    const candidate = content[block.blockIndex];
+    if (candidate && typeof candidate === "object") {
+      (candidate as Record<string, unknown>).text = text;
+    }
+  }
+}
+
+function displayAnnotations(
+  entry: SessionEntryLike,
+  state: ReturnType<typeof selectorState>,
+  theme: DisplayTheme,
+): DisplayAnnotations {
+  const manager = getManager();
+  const path = manager
+    ? activePath(manager.getEntries(), manager.getLeafId())
+    : [];
+  const unit = buildLogicalUnits(path).units.find((candidate) =>
+    candidate.entryIds.includes(entry.id),
+  );
+  const unitId = unit?.id ?? entry.id;
+  const edits: Array<{ text: string; blockIndex?: number }> = [];
+  let removed = false;
+  let before = false;
+  let after = false;
+  for (const operation of state.operations) {
+    if (operation.kind === "edit-text" && operation.entryId === entry.id) {
+      edits.push({ text: operation.text, blockIndex: operation.blockIndex });
+    }
+  }
+  for (let index = state.operations.length - 1; index >= 0; index -= 1) {
+    const operation = state.operations[index];
+    if (
+      operation.kind === "remove-unit" &&
+      (operation.unitId === unitId || operation.unitId === entry.id)
+    ) {
+      removed = true;
+    } else if (
+      operation.kind === "insert-note" &&
+      (operation.anchorUnitId === unitId || operation.anchorUnitId === entry.id)
+    ) {
+      if (operation.position === "before" && unit?.entryIds[0] === entry.id) {
+        before = true;
+      }
+      if (
+        operation.position === "after" &&
+        unit?.entryIds.at(-1) === entry.id
+      ) {
+        after = true;
+      }
+    }
+  }
+  const markers = [
+    removed ? theme.fg("error", "[removed] ") : "",
+    edits.length > 0 ? theme.fg("warning", "[edited] ") : "",
+    before ? theme.fg("accent", "[+ before] ") : "",
+    after ? theme.fg("accent", "[+ after] ") : "",
+  ];
+  return { edits, marker: markers.join("") };
 }
 
 function isPlainInlineSubmit(keyData: string): boolean {
@@ -250,7 +427,7 @@ function editorHelpLine(
     : state.flow === "save-review"
       ? "Tree editor save: Yes apply · Cancel keep staged"
       : state.flow === "exit-confirm"
-        ? "Exit tree: Cancel keep editing · Yes apply · No discard"
+        ? "Exit menu: Yes save · No keep editing · No abandon"
         : state.editMode
           ? "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u undo"
           : "Tree editor: Tab edit mode · Escape exit /tree";
@@ -560,22 +737,33 @@ function showExitConfirmation(
   const ctx = getExtensionContext();
   if (!ctx) return;
   state.confirmingExit = true;
+  const keepEditing = () => {
+    ctx.ui.notify("Returned to tree; staged changes were kept", "info");
+  };
   const shown = showChoiceMenu(
     selector,
     state,
     list,
     "exit-confirm",
-    `Exit tree with ${state.operations.length} staged item${state.operations.length === 1 ? "" : "s"}?`,
+    `Save changes to ${state.operations.length} staged item${state.operations.length === 1 ? "" : "s"}?`,
     [
-      { value: "cancel", label: "Cancel" },
-      { value: "yes", label: "Yes" },
-      { value: "no", label: "No" },
+      { value: "apply", label: "Yes, and return to conversation" },
+      {
+        value: "keep",
+        label: "No. Return to tree and continue making changes",
+      },
+      {
+        value: "discard",
+        label: "No. Return to conversation and abandon staged changes",
+      },
     ],
     0,
     (value) => {
-      if (value === "yes") {
+      if (value === "apply") {
         void previewAndApply(selector, state, list, true);
-      } else if (value === "no") {
+      } else if (value === "keep") {
+        keepEditing();
+      } else if (value === "discard") {
         state.operations = [];
         state.snapshot = undefined;
         state.editMode = false;
@@ -583,9 +771,7 @@ function showExitConfirmation(
         ctx.ui.notify("Staged changes discarded", "info");
       }
     },
-    () => {
-      ctx.ui.notify("Kept editing; staged changes were not discarded", "info");
-    },
+    keepEditing,
   );
   if (!shown) state.confirmingExit = false;
 }

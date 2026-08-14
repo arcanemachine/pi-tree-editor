@@ -34,7 +34,7 @@ Open `/tree`, then press `Tab` to enter tree-editor mode. Native tree navigation
 
 ```text
 s save · e edit · d remove · a after · Shift+A before · u undo
-Escape exits directly when unchanged, or opens Cancel / Yes / No when staged
+Escape exits directly when unchanged, or opens the staged-change save menu
 ```
 
 - `e` edits a supported text block inline.
@@ -43,9 +43,14 @@ Escape exits directly when unchanged, or opens Cancel / Yes / No when staged
 - `Shift+A` inserts a visible context note before the selected unit.
 - `u` undoes the latest staged operation.
 - `s` opens a save menu showing the staged item count. `Yes` applies (default); `Cancel` keeps editing.
-- `Escape` cancels inline input. With no staged changes it exits `/tree`; with staged changes it opens `Cancel / Yes / No` (default `Cancel`): `Cancel` keeps editing, `Yes` applies, and `No` discards and exits.
+- `Escape` cancels inline input. With no staged changes it exits `/tree`; with staged changes it opens `Save changes to N staged item(s)?` (defaulting to the first option):
+  - `Yes, and return to conversation` applies the staged changes.
+  - `No. Return to tree and continue making changes` keeps editing with staged changes.
+  - `No. Return to conversation and abandon staged changes` discards staged changes and exits.
 
-Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter, or Escape for Cancel. Planning or apply failures leave staged work available for correction or retry.
+Escape selects the second option.
+
+Staged rows show edited and removed markers, and annotate inserted notes at their anchor when native display capabilities allow it. Undo removes the corresponding marker. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter, or Escape for Cancel. Planning or apply failures leave staged work available for correction or retry.
 
 ### Multiline input
 

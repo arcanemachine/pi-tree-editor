@@ -16,11 +16,20 @@ type FakeModules = {
   interactiveModule: Record<string, unknown>;
   selectorCalls: string[];
   interactiveCalls: number[];
+  displayList: {
+    getEntryDisplayText(node: unknown, isSelected: boolean): string;
+  };
 };
 
 function fakeModules(): FakeModules {
   const selectorCalls: string[] = [];
   const interactiveCalls: number[] = [];
+  const displayList = {
+    getEntryDisplayText(node: unknown, isSelected: boolean): string {
+      const entry = (node as { entry?: { text?: string } }).entry;
+      return `${isSelected ? ">" : "-"}${entry?.text ?? "native row"}`;
+    },
+  };
   class TreeHelp {
     render(width: number): string[] {
       return [`native help ${width}`, "native footer"];
@@ -33,7 +42,7 @@ function fakeModules(): FakeModules {
       selectorCalls.push(data);
     }
     getTreeList(): object {
-      return {};
+      return displayList;
     }
     render(width: number): string[] {
       return [
@@ -52,6 +61,7 @@ function fakeModules(): FakeModules {
     interactiveModule: { InteractiveMode },
     selectorCalls,
     interactiveCalls,
+    displayList,
   };
 }
 
@@ -78,6 +88,20 @@ describe("native compatibility", () => {
     const status = getHookStatus();
     expect(status.enabled).toBe(installed);
     if (!installed) expect(status.reason).toBeTruthy();
+  });
+
+  it("keeps core hooks when the optional theme module is unavailable", async () => {
+    const modules = fakeModules();
+    const installed = await installNativeHooksForTest(async () => ({
+      selectorModule: modules.selectorModule,
+      interactiveModule: modules.interactiveModule,
+    }));
+
+    expect(installed).toBe(true);
+    new (modules.selectorModule.TreeSelectorComponent as any)().handleInput(
+      "native",
+    );
+    expect(modules.selectorCalls).toEqual(["native"]);
   });
 
   it("keeps native behavior when selector module import fails", async () => {
@@ -194,10 +218,14 @@ describe("native compatibility", () => {
 
   it("bypasses selector augmentation after a runtime capability failure", () => {
     const modules = fakeModules();
+    const originalDisplay = modules.displayList.getEntryDisplayText;
+    const nativeNode = { entry: { text: "native row" } };
+    const nativeRow = originalDisplay(nativeNode, false);
     const warnings = captureWarnings();
     const installed = installNativeHooksWithModulesForTest(
       modules.selectorModule,
       modules.interactiveModule,
+      { theme: { fg: (_color: string, text: string) => text } },
     );
     expect(installed).toBe(true);
 
@@ -208,14 +236,20 @@ describe("native compatibility", () => {
     expect(
       enabledLines.some((line: string) => line.includes("Tree editor")),
     ).toBe(true);
+    expect(modules.displayList.getEntryDisplayText).not.toBe(originalDisplay);
 
     const mode = new (modules.interactiveModule.InteractiveMode as any)();
     mode.showTreeSelector.call({});
     mode.showTreeSelector.call({});
     selector.handleInput("native");
     const disabledLines = selector.render(30);
+    const disabledRow = modules.displayList.getEntryDisplayText(
+      nativeNode,
+      false,
+    );
 
     expect(disabledLines).toEqual(["native tree", ...nativeHelp]);
+    expect(disabledRow).toBe(nativeRow);
     expect(
       disabledLines.some((line: string) => line.includes("Tree editor")),
     ).toBe(false);
