@@ -113,6 +113,74 @@ describe("applySurgery", () => {
     expect(manager.entries.at(-1)?.customType).toBe("pi-tree-editor.surgery");
   });
 
+  it("applies reasoning edits without mutating the source branch", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "assistant",
+        parentId: null,
+        timestamp: "old",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "old thought" },
+            { type: "text", text: "answer" },
+          ],
+          stopReason: "stop",
+          timestamp: 0,
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+        },
+      },
+    ] as SessionEntryLike[];
+    const manager = new FakeManager(entries, "assistant");
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "edit-reasoning",
+          entryId: "assistant",
+          blockIndex: 0,
+          thinking: "new thought",
+        },
+      ],
+    });
+    await applySurgery(manager, plan);
+    expect(
+      (
+        manager.entries.find((entry) => entry.id === "assistant")?.message as {
+          content: unknown;
+        }
+      ).content,
+    ).toEqual([
+      { type: "thinking", thinking: "old thought" },
+      { type: "text", text: "answer" },
+    ]);
+    expect(
+      (
+        manager.entries.find((entry) => entry.id === "new-1")?.message as {
+          content: unknown;
+        }
+      ).content,
+    ).toEqual([
+      { type: "thinking", thinking: "new thought" },
+      { type: "text", text: "answer" },
+    ]);
+  });
+
   it("forces native navigation to rebuild from the reconstructed audit leaf", async () => {
     const entries = [user("u", null, "old")];
     const manager = new FakeManager(entries, "u");

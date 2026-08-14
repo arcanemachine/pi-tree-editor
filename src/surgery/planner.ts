@@ -4,6 +4,8 @@ import {
   assertEditable,
   buildLogicalUnits,
   editableTextBlocks,
+  reasoningBlocks,
+  reasoningEligibility,
 } from "./logical-units.js";
 import {
   SurgeryError,
@@ -58,6 +60,10 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
   const normalized = input.operations.map((operation) => clone(operation));
   const removedUnits = new Set<string>();
   const edited = new Map<string, { blockIndex: number; text: string }>();
+  const reasoningEdited = new Map<
+    string,
+    { blockIndex: number; thinking: string }
+  >();
   const inserts: Array<Extract<SurgeryOperation, { kind: "insert-note" }>> = [];
   const affectedIndices: number[] = [];
 
@@ -97,6 +103,60 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
       edited.set(`${entry.id}:${blockIndex}`, {
         blockIndex,
         text: operation.text,
+      });
+      affectedIndices.push(pathIndices.get(entry.id)!);
+      continue;
+    }
+
+    if (operation.kind === "edit-reasoning") {
+      const entry = sourceById.get(operation.entryId);
+      const unit = entryToUnit.get(operation.entryId);
+      if (!entry || !unit || !pathIndices.has(operation.entryId)) {
+        throw new SurgeryError(
+          "OFF_PATH_TARGET",
+          `Entry ${operation.entryId} is not on the active path`,
+        );
+      }
+      if (removedUnits.has(unit.id)) {
+        throw new SurgeryError(
+          "CONFLICTING_OPERATION",
+          `Entry ${entry.id} is already marked for removal`,
+        );
+      }
+      const eligibility = reasoningEligibility(entry);
+      if (!eligibility.eligible) {
+        throw new SurgeryError(
+          "REASONING_PROTECTED",
+          `Assistant reasoning is read-only (${eligibility.reason ?? "unsupported"})`,
+        );
+      }
+      const block = reasoningBlocks(entry).find(
+        (candidate) => candidate.blockIndex === operation.blockIndex,
+      );
+      if (!block) {
+        throw new SurgeryError(
+          "INVALID_REASONING_BLOCK",
+          `Entry ${entry.id} has no editable reasoning block at index ${operation.blockIndex}`,
+        );
+      }
+      if (typeof operation.thinking !== "string") {
+        throw new SurgeryError(
+          "INVALID_REASONING",
+          "Edited reasoning must be a string",
+        );
+      }
+      if (
+        operation.thinking.trim().length === 0 &&
+        isSoleReasoningBlock(entry, operation.blockIndex)
+      ) {
+        throw new SurgeryError(
+          "INVALID_REASONING",
+          "Cannot remove the only content block from an assistant entry",
+        );
+      }
+      reasoningEdited.set(`${entry.id}:${operation.blockIndex}`, {
+        blockIndex: operation.blockIndex,
+        thinking: operation.thinking,
       });
       affectedIndices.push(pathIndices.get(entry.id)!);
       continue;
@@ -168,7 +228,7 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     affectedIndices.push(unit.startIndex);
   }
 
-  for (const key of edited.keys()) {
+  for (const key of [...edited.keys(), ...reasoningEdited.keys()]) {
     const entryId = key.split(":", 1)[0];
     const unit = entryToUnit.get(entryId);
     if (unit && removedUnits.has(unit.id)) {
@@ -177,6 +237,26 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
         `Entry ${entryId} is both edited and removed`,
       );
     }
+  }
+  const claimedActions = new Map<string, SurgeryOperation>();
+  for (const operation of normalized) {
+    const unit =
+      operation.kind === "edit-text" || operation.kind === "edit-reasoning"
+        ? entryToUnit.get(operation.entryId)
+        : operation.kind === "remove-unit"
+          ? (unitById.get(operation.unitId) ??
+            entryToUnit.get(operation.unitId))
+          : (unitById.get(operation.anchorUnitId) ??
+            entryToUnit.get(operation.anchorUnitId));
+    if (!unit) continue;
+    const previous = claimedActions.get(unit.id);
+    if (previous) {
+      throw new SurgeryError(
+        "CONFLICTING_OPERATION",
+        `Multiple staged actions target logical unit ${unit.id}`,
+      );
+    }
+    claimedActions.set(unit.id, operation);
   }
   validateCompactionBoundaries(sourcePath, unitById, removedUnits);
 
@@ -214,7 +294,7 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
       if (before) replay.push(noteItem(before, "before", unit.id));
     }
     if (!removedUnits.has(unit.id) && isReplayableEntry(entry)) {
-      const editedEntry = applyEdits(entry, edited);
+      const editedEntry = applyEdits(entry, edited, reasoningEdited);
       replay.push({ kind: "entry", sourceId: entry.id, entry: editedEntry });
     }
     if (entry.id === unit.entries[unit.entries.length - 1].id) {
@@ -254,10 +334,27 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     operations: normalized,
     removedEntryIds: [...new Set(removedEntryIds)],
     editedEntryIds: [...new Set(editedEntryIds)],
+    editedReasoningEntryIds: [
+      ...new Set(
+        [...reasoningEdited.keys()].map((key) => key.split(":", 1)[0]),
+      ),
+    ],
+    removedReasoningCount: [...reasoningEdited.values()].filter(
+      (edit) => edit.thinking.trim().length === 0,
+    ).length,
     insertedNoteIds: inserts.map((_, index) => `insert-note-${index + 1}`),
     warnings,
     earliestAffectedIndex,
   };
+}
+
+function isSoleReasoningBlock(
+  entry: SessionEntryLike,
+  blockIndex: number,
+): boolean {
+  if (entry.type !== "message" || !isObject(entry.message)) return false;
+  const content = (entry.message as Record<string, unknown>).content;
+  return Array.isArray(content) && content.length === 1 && blockIndex === 0;
 }
 
 function noteItem(
@@ -277,11 +374,17 @@ function noteItem(
 function applyEdits(
   entry: SessionEntryLike,
   edits: Map<string, { blockIndex: number; text: string }>,
+  reasoningEdits: Map<string, { blockIndex: number; thinking: string }>,
 ): SessionEntryLike {
   const entryEdits = [...edits.entries()]
     .filter(([key]) => key.startsWith(`${entry.id}:`))
     .map(([, value]) => value);
-  if (entryEdits.length === 0) return clone(entry);
+  const entryReasoningEdits = [...reasoningEdits.entries()]
+    .filter(([key]) => key.startsWith(`${entry.id}:`))
+    .map(([, value]) => value);
+  if (entryEdits.length === 0 && entryReasoningEdits.length === 0) {
+    return clone(entry);
+  }
   const result = clone(entry);
   if (result.type === "compaction" || result.type === "branch_summary") {
     result.summary = entryEdits[0].text;
@@ -294,9 +397,12 @@ function applyEdits(
   if (isObject(result.message)) {
     const nextMessage: Record<string, unknown> = {
       ...(result.message as Record<string, unknown>),
-      content: replaceContent(
-        (result.message as Record<string, unknown>).content,
-        entryEdits,
+      content: replaceReasoning(
+        replaceContent(
+          (result.message as Record<string, unknown>).content,
+          entryEdits,
+        ),
+        entryReasoningEdits,
       ),
     };
     if (nextMessage.role === "assistant") {
@@ -315,6 +421,27 @@ function applyEdits(
     result.message = nextMessage;
   }
   return result;
+}
+
+function replaceReasoning(
+  content: unknown,
+  edits: Array<{ blockIndex: number; thinking: string }>,
+): unknown {
+  if (!Array.isArray(content) || edits.length === 0) return content;
+  const byIndex = new Map(
+    edits.map((edit) => [edit.blockIndex, edit.thinking]),
+  );
+  return content.flatMap((block, index) => {
+    if (!isObject(block) || block.type !== "thinking" || !byIndex.has(index)) {
+      return [block];
+    }
+    const thinking = byIndex.get(index) ?? "";
+    if (thinking.trim().length === 0) return [];
+    const next: Record<string, unknown> = { ...block, thinking };
+    delete next.thinkingSignature;
+    delete next.redacted;
+    return [next];
+  });
 }
 
 function replaceContent(

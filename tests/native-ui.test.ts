@@ -1030,6 +1030,303 @@ describe("native tree editor interaction", () => {
     expect(manager.getEntries()).toEqual(before);
   });
 
+  it("keeps legacy plain-string assistant text editable", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-legacy-assistant-regression",
+    );
+    const leafId = manager.appendMessage({
+      role: "assistant",
+      content: "legacy answer" as never,
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: manager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    selector.handleInput("!");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations[0]).toMatchObject({
+      kind: "edit-text",
+      entryId: leafId,
+    });
+  });
+
+  it("refuses to remove an assistant's sole reasoning block", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const themeUrl = new URL(
+      "./modes/interactive/theme/theme.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { initTheme } = await import(themeUrl);
+    initTheme("dark", false);
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-sole-reasoning-regression",
+    );
+    const leafId = manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "only thought" }],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    const notifications: string[] = [];
+    setActiveMode({
+      sessionManager: manager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: (message: string) => notifications.push(message) },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    const input = selectorState(selector).inlineInput!.input as unknown as {
+      setText?: (value: string) => void;
+      setValue?: (value: string) => void;
+    };
+    if (input.setText) input.setText("");
+    else input.setValue!("");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    expect(notifications.at(-1)).toContain("only content block");
+    selector.handleInput("\u001b");
+  });
+
+  it("shows and stages safe reasoning without mutating the source entry", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const themeUrl = new URL(
+      "./modes/interactive/theme/theme.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { initTheme } = await import(themeUrl);
+    initTheme("dark", false);
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-reasoning-ui-regression",
+    );
+    const leafId = manager.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "inspect the repository" },
+        { type: "text", text: "answer" },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    const original = structuredClone(manager.getEntries());
+    setActiveMode({
+      sessionManager: manager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    const firstReasonRender = selector.render(80);
+    expect(firstReasonRender.join("\n")).toContain(
+      "[reasoning: inspect the repository]",
+    );
+    selector.handleInput("e");
+    expect(selector.render(80).join("\n")).toContain(
+      "Reasoning — inspect the repository",
+    );
+    selector.handleInput("2");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    const setInlineText = (text: string) => {
+      const input = selectorState(selector).inlineInput!.input as unknown as {
+        setText?: (value: string) => void;
+        setValue?: (value: string) => void;
+      };
+      if (input.setText) input.setText(text);
+      else input.setValue!(text);
+    };
+    setInlineText("new thought");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-reasoning",
+        entryId: leafId,
+        blockIndex: 0,
+        thinking: "new thought",
+      },
+    ]);
+    const staged = selector.render(80).join("\n");
+    expect(staged).toContain("[edit reasoning]");
+    expect(staged).toContain("[reasoning: new thought]");
+    expect(manager.getEntries()).toEqual(original);
+
+    selector.handleInput("e");
+    selector.handleInput("2");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations[0]).toMatchObject({
+      kind: "edit-reasoning",
+      thinking: "new thought",
+    });
+    selector.handleInput("u");
+    selector.handleInput("e");
+    selector.handleInput("2");
+    setInlineText("");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations[0]).toMatchObject({
+      kind: "edit-reasoning",
+      thinking: "",
+    });
+    expect(selector.render(80).join("\n")).toContain("[reasoning: removed]");
+    selector.handleInput("d");
+    expect(selectorState(selector).operations).toEqual([
+      { kind: "remove-unit", unitId: leafId },
+    ]);
+    selector.handleInput("e");
+    selector.handleInput("2");
+    setInlineText("restored thought");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations[0]).toMatchObject({
+      kind: "edit-reasoning",
+      thinking: "restored thought",
+    });
+    expect(
+      selector.render(24).every((line: string) => visibleWidth(line) <= 24),
+    ).toBe(true);
+  });
+
+  it("shows unsafe reasoning as read-only with a concise reason", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-unsafe-reasoning-ui-regression",
+    );
+    const leafId = manager.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "signed thought",
+          thinkingSignature: "sig",
+        },
+        { type: "text", text: "answer" },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    setActiveMode({ sessionManager: manager } as never);
+    const notifications: string[] = [];
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: (message: string) => notifications.push(message) },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    expect(selector.render(80).join("\n")).toContain(
+      "[reasoning: signed thought]",
+    );
+    selector.handleInput("e");
+    expect(selector.render(80).join("\n")).toContain(
+      "Reasoning — read-only (provider-signed)",
+    );
+    selector.handleInput("2");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(notifications.at(-1)).toContain("read-only");
+  });
+
   it("stays bounded through repeated narrow multiline navigation and state changes", async () => {
     await installNativeHooks();
     const treeSelectorUrl = new URL(

@@ -145,18 +145,28 @@ export async function applySurgery(
               entryId: operation.entryId,
               blockIndex: operation.blockIndex,
             }
-          : operation.kind === "insert-note"
+          : operation.kind === "edit-reasoning"
             ? {
                 kind: operation.kind,
-                anchorUnitId: operation.anchorUnitId,
-                position: operation.position,
-                textLength: operation.text.length,
+                entryId: operation.entryId,
+                blockIndex: operation.blockIndex,
+                thinkingLength: operation.thinking.length,
+                removesBlock: operation.thinking.trim().length === 0,
               }
-            : operation,
+            : operation.kind === "insert-note"
+              ? {
+                  kind: operation.kind,
+                  anchorUnitId: operation.anchorUnitId,
+                  position: operation.position,
+                  textLength: operation.text.length,
+                }
+              : operation,
       ),
       oldToNew,
       removedEntryIds: plan.removedEntryIds,
       editedEntryIds: plan.editedEntryIds,
+      editedReasoningEntryIds: plan.editedReasoningEntryIds,
+      removedReasoningCount: plan.removedReasoningCount,
       insertedNoteIds,
       warnings: plan.warnings,
     });

@@ -4,6 +4,8 @@ import { activePath } from "../surgery/active-path.js";
 import {
   buildLogicalUnits,
   editableTextBlocks,
+  reasoningBlocks,
+  reasoningEligibility,
 } from "../surgery/logical-units.js";
 import {
   Container,
@@ -252,11 +254,11 @@ function patchTreeListDisplay(
     try {
       const display = displayAnnotations(entry, state, theme);
       const displayNode =
-        display.edits.length > 0
-          ? cloneDisplayNode(node, entry, display.edits)
+        display.edits.length > 0 || display.reasoningEdits.length > 0
+          ? cloneDisplayNode(node, entry, display.edits, display.reasoningEdits)
           : node;
       const rendered = original.call(this, displayNode, isSelected);
-      return `${display.marker}${rendered}`;
+      return `${display.reasoningPreview}${display.marker}${rendered}`;
     } catch {
       return original.call(this, node, isSelected);
     }
@@ -266,6 +268,8 @@ function patchTreeListDisplay(
 
 type DisplayAnnotations = {
   edits: Array<{ text: string; blockIndex?: number }>;
+  reasoningEdits: Array<{ thinking: string; blockIndex: number }>;
+  reasoningPreview: string;
   marker: string;
 };
 
@@ -281,10 +285,14 @@ function cloneDisplayNode(
   node: unknown,
   entry: SessionEntryLike,
   edits: Array<{ text: string; blockIndex?: number }>,
+  reasoningEdits: Array<{ thinking: string; blockIndex: number }>,
 ): unknown {
   const clonedEntry = structuredClone(entry) as SessionEntryLike;
   for (const edit of edits) {
     applyDisplayEdit(clonedEntry, edit.text, edit.blockIndex);
+  }
+  for (const edit of reasoningEdits) {
+    applyDisplayReasoningEdit(clonedEntry, edit.thinking, edit.blockIndex);
   }
   return { ...(node as Record<string, unknown>), entry: clonedEntry };
 }
@@ -328,6 +336,36 @@ function applyDisplayEdit(
   }
 }
 
+function applyDisplayReasoningEdit(
+  entry: SessionEntryLike,
+  thinking: string,
+  blockIndex: number,
+): void {
+  if (
+    entry.type !== "message" ||
+    !entry.message ||
+    typeof entry.message !== "object"
+  ) {
+    return;
+  }
+  const message = entry.message as Record<string, unknown>;
+  if (!Array.isArray(message.content)) return;
+  const content = message.content as unknown[];
+  message.content = content.flatMap((block, index) => {
+    if (index !== blockIndex || !block || typeof block !== "object") {
+      return [block];
+    }
+    if (thinking.trim().length === 0) return [];
+    const next: Record<string, unknown> = {
+      ...(block as Record<string, unknown>),
+      thinking,
+    };
+    delete next.thinkingSignature;
+    delete next.redacted;
+    return [next];
+  });
+}
+
 function displayAnnotations(
   entry: SessionEntryLike,
   state: ReturnType<typeof selectorState>,
@@ -341,6 +379,10 @@ function displayAnnotations(
     operation?.kind === "edit-text" && operation.entryId === entry.id
       ? [{ text: operation.text, blockIndex: operation.blockIndex }]
       : [];
+  const reasoningEdits =
+    operation?.kind === "edit-reasoning" && operation.entryId === entry.id
+      ? [{ thinking: operation.thinking, blockIndex: operation.blockIndex }]
+      : [];
   const isFirstEntry = (unit?.entryIds[0] ?? entry.id) === entry.id;
   const isLastEntry = (unit?.entryIds.at(-1) ?? entry.id) === entry.id;
   const removed = operation?.kind === "remove-unit";
@@ -352,13 +394,56 @@ function displayAnnotations(
     operation?.kind === "insert-note" &&
     operation.position === "after" &&
     isLastEntry;
+  const sourcePreview = reasoningEdits[0]
+    ? {
+        text: reasoningEdits[0].thinking,
+        safe: true,
+        removed: reasoningEdits[0].thinking.trim().length === 0,
+      }
+    : reasoningBlocks(entry)[0];
+  const previewBlock = sourcePreview
+    ? {
+        text: sourcePreview.text,
+        safe: sourcePreview.safe,
+        reason: "reason" in sourcePreview ? sourcePreview.reason : undefined,
+        removed: "removed" in sourcePreview && sourcePreview.removed === true,
+      }
+    : undefined;
+  const reasoningPreview = previewBlock
+    ? theme.fg(
+        "thinkingText",
+        previewBlock.removed
+          ? "[reasoning: removed] "
+          : `[reasoning: ${reasoningPreviewText(previewBlock)}] `,
+      )
+    : "";
   const markers = [
     removed ? theme.fg("error", "[remove] ") : "",
     edits.length > 0 ? theme.fg("warning", "[edit] ") : "",
+    reasoningEdits.length > 0 ? theme.fg("warning", "[edit reasoning] ") : "",
     before ? theme.fg("accent", "[insert before] ") : "",
     after ? theme.fg("accent", "[insert after] ") : "",
   ];
-  return { edits, marker: markers.join("") };
+  return {
+    edits,
+    reasoningEdits,
+    reasoningPreview,
+    marker: markers.join(""),
+  };
+}
+
+function reasoningPreviewText(block: {
+  text: string;
+  safe: boolean;
+  reason?: string;
+}): string {
+  if (!block.safe && block.reason === "redacted") return "redacted";
+  const text = block.text.replace(/[\t\r\n]+/g, " ").trim();
+  if (!text && !block.safe && block.reason === "provider-signed") {
+    return "opaque";
+  }
+  if (!text) return "empty";
+  return text.length > 56 ? `${text.slice(0, 55)}…` : text;
 }
 
 function isPlainInlineSubmit(keyData: string): boolean {
@@ -470,7 +555,7 @@ function operationTargetsUnit(
   entryId: string,
 ): boolean {
   const entryIds = unit?.entryIds ?? [entryId];
-  if (operation.kind === "edit-text") {
+  if (operation.kind === "edit-text" || operation.kind === "edit-reasoning") {
     return entryIds.includes(operation.entryId);
   }
   const targetId =
@@ -579,6 +664,14 @@ async function insertNote(
   );
 }
 
+type EditChoice = {
+  kind: "text" | "reasoning";
+  blockIndex: number;
+  text: string;
+  safe: boolean;
+  label: string;
+};
+
 async function editEntry(
   selector: SelectorLike,
   state: ReturnType<typeof selectorState>,
@@ -587,67 +680,157 @@ async function editEntry(
 ): Promise<void> {
   const ctx = getExtensionContext();
   if (!ctx?.hasUI) return;
-  const blocks = editableTextBlocks(entry);
-  if (blocks.length === 0) {
-    ctx.ui.notify("This tree entry has no editable text block", "warning");
+  const textBlocks = editableTextBlocks(entry);
+  const reasoning = reasoningBlocks(entry);
+  const message =
+    entry.type === "message" &&
+    entry.message &&
+    typeof entry.message === "object"
+      ? (entry.message as { role?: unknown })
+      : undefined;
+  const isAssistant = message?.role === "assistant";
+  const eligibility = isAssistant ? reasoningEligibility(entry) : undefined;
+  const messageSafe = !isAssistant || eligibility?.eligible === true;
+  const choices: EditChoice[] = [
+    ...textBlocks.map((block) => ({
+      kind: "text" as const,
+      blockIndex: block.blockIndex,
+      text: block.text,
+      safe: messageSafe,
+      label: `Answer text — ${previewChoiceText(block.text)}`,
+    })),
+    ...reasoning.map((block) => ({
+      kind: "reasoning" as const,
+      blockIndex: block.blockIndex,
+      text: block.text,
+      safe: block.safe && messageSafe,
+      label:
+        block.safe && messageSafe
+          ? `Reasoning — ${previewChoiceText(block.text)}`
+          : `Reasoning — read-only (${eligibility?.reason ?? block.reason ?? "unsupported"})`,
+    })),
+  ];
+  if (choices.length === 0) {
+    ctx.ui.notify(
+      "This tree entry has no editable text or reasoning block",
+      "warning",
+    );
     return;
   }
-  const startBlock = (block: (typeof blocks)[number]) => {
+  const startChoice = (choice: EditChoice) => {
+    if (!choice.safe) {
+      ctx.ui.notify(
+        `This entry is read-only (${eligibility?.reason ?? "unsupported"})`,
+        "warning",
+      );
+      return;
+    }
     const unit = logicalUnitForEntry(entry.id);
     const existing = state.operations.find((operation) =>
       operationTargetsUnit(operation, unit, entry.id),
     );
     const prefill =
+      choice.kind === "text" &&
       existing?.kind === "edit-text" &&
       existing.entryId === entry.id &&
-      (existing.blockIndex ?? 0) === block.blockIndex
+      (existing.blockIndex ?? 0) === choice.blockIndex
         ? existing.text
-        : block.text;
+        : choice.kind === "reasoning" &&
+            existing?.kind === "edit-reasoning" &&
+            existing.entryId === entry.id &&
+            existing.blockIndex === choice.blockIndex
+          ? existing.thinking
+          : choice.text;
     startInlineEdit(
       selector,
       state,
       prefill,
       (text) => {
         snapshotIfNeeded(state);
-        replaceOperationForUnit(state, unit, entry.id, {
-          kind: "edit-text",
-          entryId: entry.id,
-          blockIndex: block.blockIndex,
-          text,
-        });
-        ctx.ui.notify("Conversation edit staged", "info");
+        if (choice.kind === "reasoning") {
+          if (
+            text.trim().length === 0 &&
+            isSoleReasoningBlock(entry, choice.blockIndex)
+          ) {
+            ctx.ui.notify(
+              "Cannot remove the only content block from an assistant entry",
+              "warning",
+            );
+            return false;
+          }
+          replaceOperationForUnit(state, unit, entry.id, {
+            kind: "edit-reasoning",
+            entryId: entry.id,
+            blockIndex: choice.blockIndex,
+            thinking: text,
+          });
+          ctx.ui.notify(
+            text.trim().length === 0
+              ? "Reasoning block removal staged"
+              : "Reasoning edit staged",
+            "info",
+          );
+        } else {
+          replaceOperationForUnit(state, unit, entry.id, {
+            kind: "edit-text",
+            entryId: entry.id,
+            blockIndex: choice.blockIndex,
+            text,
+          });
+          ctx.ui.notify("Conversation edit staged", "info");
+        }
         return true;
       },
       list,
+      choice.kind === "reasoning",
     );
   };
-  if (blocks.length > 1) {
-    state.flow = "block-choice";
-    showFlowComponent(
-      selector,
-      state,
-      [
-        "Choose a text block to edit",
-        ...blocks.map(
-          (candidate, index) => `${index + 1}: ${candidate.text.slice(0, 70)}`,
-        ),
-        "Press 1-9 to choose · Escape back to the tree",
-      ],
-      (data) => {
-        const selectedIndex = Number.parseInt(data, 10) - 1;
-        const block = Number.isInteger(selectedIndex)
-          ? blocks[selectedIndex]
-          : undefined;
-        if (!block) return;
-        state.flowComponent?.finish();
-        startBlock(block);
-      },
-      () => undefined,
-      () => undefined,
-    );
+  if (choices.length === 1 && choices[0]!.safe) {
+    startChoice(choices[0]!);
     return;
   }
-  startBlock(blocks[0]!);
+  state.flow = "block-choice";
+  showFlowComponent(
+    selector,
+    state,
+    [
+      "Choose a text block to edit",
+      ...choices.map((choice, index) => `${index + 1}: ${choice.label}`),
+      "Press 1-9 to choose · Escape back to the tree",
+    ],
+    (data) => {
+      const selectedIndex = Number.parseInt(data, 10) - 1;
+      const choice = Number.isInteger(selectedIndex)
+        ? choices[selectedIndex]
+        : undefined;
+      if (!choice) return;
+      state.flowComponent?.finish();
+      startChoice(choice);
+    },
+    () => undefined,
+    () => undefined,
+  );
+}
+
+function isSoleReasoningBlock(
+  entry: SessionEntryLike,
+  blockIndex: number,
+): boolean {
+  if (
+    entry.type !== "message" ||
+    !entry.message ||
+    typeof entry.message !== "object"
+  ) {
+    return false;
+  }
+  const content = (entry.message as Record<string, unknown>).content;
+  return Array.isArray(content) && content.length === 1 && blockIndex === 0;
+}
+
+function previewChoiceText(text: string): string {
+  const normalized = text.replace(/[\t\r\n]+/g, " ").trim();
+  if (!normalized) return "(empty)";
+  return normalized.length > 60 ? `${normalized.slice(0, 59)}…` : normalized;
 }
 
 function showFlowComponent(
@@ -929,6 +1112,7 @@ function startInlineEdit(
   prefill: string,
   onSubmit: (text: string) => boolean,
   list: TreeListLike | undefined,
+  forceMultiline = false,
 ): void {
   const labelInputContainer = selector.labelInputContainer as
     | { clear(): void; addChild(child: unknown): void }
@@ -943,9 +1127,10 @@ function startInlineEdit(
     );
     return;
   }
-  const input = /[\r\n]/.test(prefill)
-    ? createMultilineEditor(prefill)
-    : new Input();
+  const input =
+    forceMultiline || /[\r\n]/.test(prefill)
+      ? createMultilineEditor(prefill)
+      : new Input();
   if (!input) {
     getExtensionContext()?.ui.notify(
       "Multiline inline tree editing is unavailable in this Pi build",

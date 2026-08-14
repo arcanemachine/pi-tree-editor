@@ -28,6 +28,12 @@ export type SurgeryOperation =
       blockIndex?: number;
       text: string;
     }
+  | {
+      kind: "edit-reasoning";
+      entryId: string;
+      blockIndex: number;
+      thinking: string;
+    }
   | { kind: "remove-unit"; unitId: string }
   | {
       kind: "insert-note";
@@ -75,6 +81,8 @@ export type SurgeryPlan = {
   operations: SurgeryOperation[];
   removedEntryIds: string[];
   editedEntryIds: string[];
+  editedReasoningEntryIds: string[];
+  removedReasoningCount: number;
   insertedNoteIds: string[];
   warnings: string[];
   earliestAffectedIndex: number;

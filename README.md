@@ -50,7 +50,7 @@ Escape exits directly when unchanged, or opens the staged-change save menu
 
 Escape selects the second option.
 
-Staged rows show present-tense edit, remove, and insert markers, and annotate inserted notes at their anchor when native display capabilities allow it. Staging another action on a logical unit replaces its prior action; `u` removes the selected unit's staged action. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter. Escape returns to the tree without applying or discarding staged changes. Planning or apply failures leave staged work available for correction or retry.
+Staged rows show present-tense `[edit]`, `[edit reasoning]`, `[remove]`, and insert markers, and annotate inserted notes at their anchor when native display capabilities allow it. Staging another action on a logical unit replaces its prior action; `u` removes the selected unit's staged action. Command keys are shown lowercase; uppercase aliases remain accepted. Confirmation menus are selector-local: use Up/Down and Enter. Escape returns to the tree without applying or discarding staged changes. Planning or apply failures leave staged work available for correction or retry.
 
 ### Multiline input
 
@@ -58,7 +58,7 @@ Editing a prefill containing CR or LF uses Pi's native multiline `Editor`, so ph
 
 ### What can be edited
 
-`e` edits supported text blocks in user, assistant, custom-message, compaction, and branch-summary entries. Tool results and assistant tool-call exchanges are protected from internal edits. `d` operates on logical units, so a tool call and all of its results are removed together. Unsupported structural entries cannot be edited; removal plans that violate structural boundaries fail validation.
+`e` edits supported text blocks in user, assistant, custom-message, compaction, and branch-summary entries. Assistant rows show a bounded `[reasoning: …]` preview when native display capabilities allow it. Unsigned assistant reasoning blocks are also eligible: the chooser labels answer text and reasoning separately, and submitting blank reasoning removes only that block. Provider-signed, redacted, tool-associated, or unsupported assistant content is read-only. Tool results and assistant tool-call exchanges are protected from internal edits. `d` operates on logical units, so a tool call and all of its results are removed together. Unsupported structural entries cannot be edited; removal plans that violate structural boundaries fail validation.
 
 ## Safety model
 
@@ -72,7 +72,7 @@ Edits use append-only, same-session, copy-on-write reconstruction:
 - Failures return to the original branch; partial alternate entries remain unreachable.
 - Persistence is incremental, so an in-progress reconstruction is not crash-atomic.
 
-This extension does not restore files or Git state, edit tool arguments/results or reasoning blocks, rewrite JSONL, or call an LLM to summarize content.
+This extension does not restore files or Git state, edit tool arguments/results, rewrite JSONL, or call an LLM to summarize content. Reasoning edits are limited to unsigned assistant thinking blocks and preserve all other provider blocks and metadata.
 
 ## Graceful fallback
 

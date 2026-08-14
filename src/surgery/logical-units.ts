@@ -131,6 +131,95 @@ export function buildLogicalUnits(path: SessionEntryLike[]): {
   return { units, issues };
 }
 
+export type ReasoningBlockLocation = {
+  entryId: string;
+  blockIndex: number;
+  text: string;
+  safe: boolean;
+  reason?: "provider-signed" | "redacted" | "tool-associated" | "unsupported";
+};
+
+export type ReasoningEligibility = {
+  eligible: boolean;
+  reason?: ReasoningBlockLocation["reason"];
+};
+
+function assistantContent(entry: SessionEntryLike): unknown[] | undefined {
+  if (entry.type !== "message" || !isObject(entry.message)) return undefined;
+  const message = entry.message as TreeMessage;
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return undefined;
+  }
+  return message.content;
+}
+
+export function reasoningEligibility(
+  entry: SessionEntryLike,
+): ReasoningEligibility {
+  if (entry.type === "message" && isObject(entry.message)) {
+    const message = entry.message as TreeMessage;
+    if (message.role === "assistant" && typeof message.content === "string") {
+      return { eligible: true };
+    }
+  }
+  const content = assistantContent(entry);
+  if (!content) return { eligible: false, reason: "unsupported" };
+  for (const block of content) {
+    if (!isObject(block) || typeof block.type !== "string") {
+      return { eligible: false, reason: "unsupported" };
+    }
+    if (block.type === "thinking") {
+      if (typeof block.thinking !== "string") {
+        return { eligible: false, reason: "unsupported" };
+      }
+      if (block.redacted === true) {
+        return { eligible: false, reason: "redacted" };
+      }
+      if ("thinkingSignature" in block) {
+        return { eligible: false, reason: "provider-signed" };
+      }
+      continue;
+    }
+    if (block.type === "text") {
+      if (typeof block.text !== "string") {
+        return { eligible: false, reason: "unsupported" };
+      }
+      if ("textSignature" in block) {
+        return { eligible: false, reason: "provider-signed" };
+      }
+      continue;
+    }
+    if (block.type === "toolCall") {
+      return { eligible: false, reason: "tool-associated" };
+    }
+    return { eligible: false, reason: "unsupported" };
+  }
+  return { eligible: true };
+}
+
+export function reasoningBlocks(
+  entry: SessionEntryLike,
+): ReasoningBlockLocation[] {
+  const content = assistantContent(entry);
+  if (!content) return [];
+  const eligibility = reasoningEligibility(entry);
+  return content.flatMap((block, blockIndex) =>
+    isObject(block) &&
+    block.type === "thinking" &&
+    typeof block.thinking === "string"
+      ? [
+          {
+            entryId: entry.id,
+            blockIndex,
+            text: block.thinking,
+            safe: eligibility.eligible,
+            reason: eligibility.reason,
+          },
+        ]
+      : [],
+  );
+}
+
 export function editableTextBlocks(
   entry: SessionEntryLike,
 ): TextBlockLocation[] {
@@ -185,6 +274,15 @@ export function assertEditable(entry: SessionEntryLike): void {
     );
   }
   const msg = message(entry);
+  if (msg?.role === "assistant") {
+    const eligibility = reasoningEligibility(entry);
+    if (!eligibility.eligible) {
+      throw new SurgeryError(
+        "REASONING_PROTECTED",
+        `Assistant content is read-only (${eligibility.reason ?? "unsupported"})`,
+      );
+    }
+  }
   if (msg?.role === "toolResult") {
     throw new SurgeryError(
       "TOOL_CONTENT_PROTECTED",
