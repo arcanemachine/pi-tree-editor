@@ -51,12 +51,15 @@ describe("native tree editor interaction", () => {
     expect(selector.render(100).join("\n")).toContain("Tab edit mode");
     selector.handleInput("\t");
     expect(selector.render(100).join("\n")).toContain(
-      "Tree editor ON: s save · e edit · d remove · a/Shift+A insert · u unstage",
+      "Tree editor ON: ctrl+s save · e edit · d remove · a/Shift+A insert · u unstage",
     );
     expect(notifications.at(-1)).toContain(
-      "Tree editor mode: s save, e edit, d remove, a after, Shift+A before, u unstage",
+      "Tree editor mode: ctrl+s save, e edit, d remove, a insert, u unstage",
     );
     selector.handleInput("a");
+    expect(selectorState(selector).flow).toBe("role-choice");
+    expect(selector.render(100).join("\n")).toContain("User");
+    selector.handleInput("\r");
     selector.handleInput("n");
     selector.handleInput("o");
     selector.handleInput("t");
@@ -66,17 +69,18 @@ describe("native tree editor interaction", () => {
     expect(state.inlineInput).toBeUndefined();
     expect(state.operations).toEqual([
       {
-        kind: "insert-note",
+        kind: "insert",
         anchorUnitId: leafId,
         position: "after",
+        role: "user",
         text: "note",
       },
     ]);
 
-    selector.handleInput("s");
+    selector.handleInput("\x13");
     expect(selectorState(selector).flow).toBe("save-review");
     expect(selector.render(100).join("\n")).toContain(
-      "Tree editor save: Yes apply · Cancel keep staged",
+      "Tree editor save: ctrl+s · Yes apply · Cancel keep staged",
     );
     expect(selector.render(100).join("\n")).toContain("Save 1 staged item?");
     selector.handleInput("\u001b");
@@ -89,7 +93,7 @@ describe("native tree editor interaction", () => {
       "Save changes to 1 staged item?",
     );
     expect(selector.render(100).join("\n")).toContain(
-      "→ Yes, and return to conversation",
+      "→ Yes. Return to conversation",
     );
     expect(selector.render(100).join("\n")).toContain(
       "No. Return to tree and continue making changes",
@@ -297,7 +301,7 @@ describe("native tree editor interaction", () => {
     applySelector.handleInput("\r");
     applySelector.handleInput("\u001b");
     expect(applySelector.render(48).join("\n")).toContain(
-      "→ Yes, and return to conversation",
+      "→ Yes. Return to conversation",
     );
     applySelector.handleInput("\r");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -423,6 +427,9 @@ describe("native tree editor interaction", () => {
     expect(selector.render(100).join("\n")).toContain("Tree editor ON");
 
     selector.handleInput("a");
+    expect(selectorState(selector).flow).toBe("role-choice");
+    expect(selector.render(100).join("\n")).toContain("Context note");
+    selector.handleInput("\r");
     expect(selectorState(selector).inlineInput).toBeDefined();
     expect(selector.render(100).join("\n")).toContain("Tree editor input");
     native.treeContainer.clear();
@@ -434,7 +441,7 @@ describe("native tree editor interaction", () => {
 
     selector.handleInput("x");
     selector.handleInput("\r");
-    selector.handleInput("s");
+    selector.handleInput("\x13");
     expect(selectorState(selector).flow).toBe("save-review");
     expect(selector.render(100).join("\n")).toContain("Tree editor save");
     native.treeContainer.clear();

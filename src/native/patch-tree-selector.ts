@@ -1124,7 +1124,18 @@ function startInsertInput(
       return true;
     },
     list,
-    !legacy,
+    !legacy && canUseMultilineEditor(),
+  );
+}
+
+function canUseMultilineEditor(): boolean {
+  const ui = getActiveMode()?.ui;
+  return Boolean(
+    ui &&
+    typeof ui === "object" &&
+    (ui as Record<string, unknown>).terminal &&
+    typeof (ui as { terminal?: { rows?: unknown } }).terminal?.rows ===
+      "number",
   );
 }
 
