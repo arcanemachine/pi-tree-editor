@@ -146,6 +146,13 @@ export type ReasoningBlockLocation = {
   signedTarget?: boolean;
 };
 
+export type AssistantContentBlockLocation = {
+  entryId: string;
+  blockIndex: number;
+  blockType: "text" | "thinking";
+  text: string;
+};
+
 export type ReasoningEligibility = {
   eligible: boolean;
   reason?: BlockEligibilityReason;
@@ -193,6 +200,7 @@ function assistantBlockIssue(
       if ("textSignature" in block && typeof block.textSignature !== "string") {
         return "unsupported";
       }
+      if (block.redacted === true) return "redacted";
       continue;
     }
     if (block.type === "toolCall") return "tool-associated";
@@ -290,6 +298,39 @@ export function reasoningBlockEligibility(
     }
   }
   return { eligible: true };
+}
+
+export function assistantContentBlocks(
+  entry: SessionEntryLike,
+): AssistantContentBlockLocation[] {
+  const content = assistantContent(entry);
+  if (!content || content.length <= 1 || assistantBlockIssue(content)) {
+    return [];
+  }
+  return content.flatMap<AssistantContentBlockLocation>((block, blockIndex) => {
+    if (!isObject(block)) return [];
+    if (block.type === "text" && typeof block.text === "string") {
+      return [
+        {
+          entryId: entry.id,
+          blockIndex,
+          blockType: "text" as const,
+          text: block.text,
+        },
+      ];
+    }
+    if (block.type === "thinking" && typeof block.thinking === "string") {
+      return [
+        {
+          entryId: entry.id,
+          blockIndex,
+          blockType: "thinking" as const,
+          text: block.thinking,
+        },
+      ];
+    }
+    return [];
+  });
 }
 
 export function reasoningBlocks(

@@ -17,7 +17,8 @@ export type SelectorState = {
     | "exit-confirm"
     | "block-choice"
     | "role-choice"
-    | "signed-override";
+    | "signed-override"
+    | "signed-removal";
   flowComponent?: {
     handleInput(data: string): void;
     finish(): void;

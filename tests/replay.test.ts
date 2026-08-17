@@ -313,6 +313,66 @@ describe("applySurgery", () => {
     expect(auditText).toContain("future provider continuity may fail");
   });
 
+  it("removes a signed block append-only and keeps audit content private", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "assistant",
+        parentId: null,
+        timestamp: "old",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "secret thought",
+              thinkingSignature: "secret-signature",
+            },
+            { type: "text", text: "keep answer" },
+          ],
+          stopReason: "stop",
+        },
+      },
+    ] as SessionEntryLike[];
+    const before = structuredClone(entries);
+    const manager = new FakeManager(entries, "assistant");
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "remove-block",
+          entryId: "assistant",
+          blockIndex: 0,
+          blockType: "thinking",
+          signatureDetached: true,
+          unsafe: true,
+        },
+      ],
+    });
+    const result = await applySurgery(manager, plan);
+    expect(manager.entries.find((entry) => entry.id === "assistant")).toEqual(
+      before[0],
+    );
+    expect(
+      (
+        manager.entries.find((entry) => entry.id === "new-1")?.message as {
+          content: unknown;
+        }
+      ).content,
+    ).toEqual([{ type: "text", text: "keep answer" }]);
+    const audit = manager.entries.find(
+      (entry) => entry.id === result.auditEntryId,
+    );
+    const auditText = JSON.stringify(audit?.data);
+    expect(auditText).toContain('"kind":"remove-block"');
+    expect(auditText).toContain('"originalLength":14');
+    expect(auditText).toContain('"signatureDetached":true');
+    expect(auditText).toContain('"unsafe":true');
+    expect(auditText).not.toContain("secret thought");
+    expect(auditText).not.toContain("secret-signature");
+  });
+
   it("forces native navigation to rebuild from the reconstructed audit leaf", async () => {
     const entries = [user("u", null, "old")];
     const manager = new FakeManager(entries, "u");

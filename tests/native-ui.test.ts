@@ -1240,7 +1240,7 @@ describe("native tree editor interaction", () => {
     expect(selector.render(80).join("\n")).toContain(
       "Reasoning — inspect the repository",
     );
-    selector.handleInput("2");
+    selector.handleInput("1");
     expect(selectorState(selector).inlineInput).toBeDefined();
     const setInlineText = (text: string) => {
       const input = selectorState(selector).inlineInput!.input as unknown as {
@@ -1275,7 +1275,7 @@ describe("native tree editor interaction", () => {
     expect(manager.getEntries()).toEqual(original);
 
     selector.handleInput("e");
-    selector.handleInput("2");
+    selector.handleInput("1");
     selector.handleInput("\r");
     expect(selectorState(selector).operations[0]).toMatchObject({
       kind: "edit-reasoning",
@@ -1283,7 +1283,7 @@ describe("native tree editor interaction", () => {
     });
     selector.handleInput("u");
     selector.handleInput("e");
-    selector.handleInput("2");
+    selector.handleInput("1");
     setInlineText("");
     selector.handleInput("\r");
     expect(selectorState(selector).operations[0]).toMatchObject({
@@ -1297,11 +1297,12 @@ describe("native tree editor interaction", () => {
     expect(selector.render(80).join("\n")).toContain("[reasoning: removed]");
     selector.handleInput("R");
     selector.handleInput("d");
+    selector.handleInput("3");
     expect(selectorState(selector).operations).toEqual([
       { kind: "remove-unit", unitId: leafId },
     ]);
     selector.handleInput("e");
-    selector.handleInput("2");
+    selector.handleInput("1");
     setInlineText("restored thought");
     selector.handleInput("\r");
     expect(selectorState(selector).operations[0]).toMatchObject({
@@ -1317,6 +1318,169 @@ describe("native tree editor interaction", () => {
     selector.handleInput("\t");
     expect(selectorState(selector).editMode).toBe(true);
     expect(selectorState(selector).reasoningPreviewsVisible).toBe(false);
+  });
+
+  it("offers reasoning-first partial deletion with safe and signed paths", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { initTheme } = await import(
+      new URL(
+        "./modes/interactive/theme/theme.js",
+        await import.meta.resolve("@earendil-works/pi-coding-agent"),
+      ).href
+    );
+    initTheme("dark", false);
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-partial-delete-ui",
+    );
+    const leafId = manager.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "remove thought" },
+        { type: "text", text: "remove answer" },
+        { type: "text", text: "keep answer" },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    setActiveMode({
+      sessionManager: manager,
+      ui: { terminal: { rows: 40 }, requestRender: () => undefined },
+    } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    selector.handleInput("\t");
+    selector.handleInput("d");
+    const menu = selector.render(100).join("\n");
+    expect(menu).toContain("Delete:");
+    expect(menu).toContain("1: Reasoning — remove thought");
+    expect(menu).toContain("2: Answer text — remove answer");
+    expect(menu).toContain("3: Answer text — keep answer");
+    expect(menu).toContain("4: Entire assistant message");
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).operations).toHaveLength(0);
+
+    selector.handleInput("d");
+    selector.handleInput("1");
+    selector.handleInput("d");
+    selector.handleInput("2");
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "remove-block",
+        entryId: leafId,
+        blockIndex: 0,
+        blockType: "thinking",
+        signatureDetached: false,
+        unsafe: false,
+      },
+      {
+        kind: "remove-block",
+        entryId: leafId,
+        blockIndex: 1,
+        blockType: "text",
+        signatureDetached: false,
+        unsafe: false,
+      },
+    ]);
+    expect(selector.render(100).join("\n")).toContain("[remove reasoning]");
+    expect(selector.render(100).join("\n")).toContain("[remove answer]");
+    expect(selector.render(100).join("\n")).not.toContain(
+      "[reasoning: removed]",
+    );
+    selector.handleInput("r");
+    expect(selector.render(100).join("\n")).toContain("[reasoning: removed]");
+    selector.handleInput("R");
+    selector.handleInput("d");
+    selector.handleInput("3");
+    expect(selectorState(selector).operations).toHaveLength(2);
+    selector.handleInput("d");
+    selector.handleInput("4");
+    expect(selectorState(selector).operations).toEqual([
+      { kind: "remove-unit", unitId: leafId },
+    ]);
+
+    const signedManager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-signed-partial-delete-ui",
+    );
+    const signedLeafId = signedManager.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "signed thought",
+          thinkingSignature: "s",
+        },
+        { type: "text", text: "answer" },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    setActiveMode({ sessionManager: signedManager } as never);
+    const signedSelector = new TreeSelectorComponent(
+      signedManager.getTree(),
+      signedLeafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    signedSelector.handleInput("\t");
+    signedSelector.handleInput("d");
+    signedSelector.handleInput("1");
+    expect(selectorState(signedSelector).flow).toBe("signed-removal");
+    expect(signedSelector.render(100).join("\n")).toContain(
+      "This block is provider-signed and cannot be removed safely. Remove it anyways?",
+    );
+    signedSelector.handleInput("\u001b");
+    expect(selectorState(signedSelector).operations).toHaveLength(0);
+    signedSelector.handleInput("d");
+    signedSelector.handleInput("1");
+    signedSelector.handleInput("\u001b[B");
+    signedSelector.handleInput("\r");
+    expect(selectorState(signedSelector).operations).toEqual([
+      {
+        kind: "remove-block",
+        entryId: signedLeafId,
+        blockIndex: 0,
+        blockType: "thinking",
+        signatureDetached: true,
+        unsafe: true,
+      },
+    ]);
   });
 
   it("shows unsafe reasoning as read-only with a concise reason", async () => {
@@ -1375,7 +1539,7 @@ describe("native tree editor interaction", () => {
     expect(selector.render(80).join("\n")).toContain(
       "Reasoning — signed thought (provider-signed)",
     );
-    selector.handleInput("2");
+    selector.handleInput("1");
     expect(selectorState(selector).flow).toBe("signed-override");
     expect(selector.render(80).join("\n")).toContain(
       "This block is provider-signed and cannot be edited safely. Edit it anyways?",

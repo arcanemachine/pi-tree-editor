@@ -208,9 +208,9 @@ describe("role-based staged rows", () => {
     selector.handleInput("\t");
     selector.handleInput("e");
     expect(selector.render(100).join("\n")).toContain(
-      "1: Answer text — answer",
+      "2: Answer text — answer",
     );
-    selector.handleInput("1");
+    selector.handleInput("2");
     setInlineText(selector, "changed answer");
     selector.handleInput("\r");
     expect(selectorState(selector).operations).toEqual([
@@ -228,9 +228,9 @@ describe("role-based staged rows", () => {
     selector.handleInput("u");
     selector.handleInput("e");
     expect(selector.render(100).join("\n")).toContain(
-      "3: Reasoning — unsigned thought (read-only: provider-signed)",
+      "1: Reasoning — unsigned thought (read-only: provider-signed)",
     );
-    selector.handleInput("3");
+    selector.handleInput("1");
     expect(selectorState(selector).operations).toHaveLength(0);
     expect(selectorState(selector).flow).toBeUndefined();
   });
@@ -252,7 +252,7 @@ describe("role-based staged rows", () => {
     });
     selector.handleInput("\t");
     selector.handleInput("e");
-    selector.handleInput("1");
+    selector.handleInput("2");
     setInlineText(selector, "changed answer");
     selector.handleInput("\r");
     expect(selectorState(selector).operations).toEqual([
@@ -285,11 +285,11 @@ describe("role-based staged rows", () => {
     const original = structuredClone(manager.getEntries());
     selector.handleInput("\t");
     selector.handleInput("e");
-    selector.handleInput("1");
+    selector.handleInput("2");
     setInlineText(selector, "changed answer");
     selector.handleInput("\r");
     selector.handleInput("e");
-    selector.handleInput("1");
+    selector.handleInput("2");
     const prefill = selectorState(selector).inlineInput?.input as unknown as {
       getValue?: () => string;
     };
@@ -297,7 +297,7 @@ describe("role-based staged rows", () => {
     setInlineText(selector, "re-edited answer");
     selector.handleInput("\r");
     selector.handleInput("e");
-    selector.handleInput("2");
+    selector.handleInput("1");
     selector.handleInput("\u001b[B");
     selector.handleInput("\r");
     setInlineText(selector, "changed thought");
@@ -333,11 +333,12 @@ describe("role-based staged rows", () => {
       ).toBe(true);
     }
     selector.handleInput("d");
+    selector.handleInput("3");
     expect(selectorState(selector).operations).toEqual([
       { kind: "remove-unit", unitId: leafId },
     ]);
     selector.handleInput("e");
-    selector.handleInput("1");
+    selector.handleInput("2");
     setInlineText(selector, "replacement");
     selector.handleInput("\r");
     expect(selectorState(selector).operations).toEqual([
@@ -350,7 +351,7 @@ describe("role-based staged rows", () => {
     ]);
     expect(selector.render(100).join("\n")).not.toContain("[remove]");
     selector.handleInput("e");
-    selector.handleInput("2");
+    selector.handleInput("1");
     selector.handleInput("\u001b[B");
     selector.handleInput("\r");
     setInlineText(selector, "replacement thought");

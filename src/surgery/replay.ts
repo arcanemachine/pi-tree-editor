@@ -217,28 +217,41 @@ export async function applySurgery(
                     operation.blockType === "thinking" &&
                     operation.text.trim().length === 0,
                 }
-              : operation.kind === "insert-note"
+              : operation.kind === "remove-block"
                 ? {
-                    kind: "insert",
-                    role: "context",
-                    anchorUnitId: operation.anchorUnitId,
-                    position: operation.position,
-                    textLength: operation.text.length,
+                    kind: operation.kind,
+                    entryId: operation.entryId,
+                    blockIndex: operation.blockIndex,
+                    blockType: operation.blockType,
+                    originalLength: removedBlockLength(plan, operation),
+                    contentLength: removedBlockLength(plan, operation),
+                    signatureDetached: operation.signatureDetached,
+                    unsafe: operation.unsafe,
+                    removesBlock: true,
                   }
-                : operation.kind === "insert"
+                : operation.kind === "insert-note"
                   ? {
-                      kind: operation.kind,
-                      role: operation.role,
+                      kind: "insert",
+                      role: "context",
                       anchorUnitId: operation.anchorUnitId,
                       position: operation.position,
                       textLength: operation.text.length,
                     }
-                  : operation,
+                  : operation.kind === "insert"
+                    ? {
+                        kind: operation.kind,
+                        role: operation.role,
+                        anchorUnitId: operation.anchorUnitId,
+                        position: operation.position,
+                        textLength: operation.text.length,
+                      }
+                    : operation,
       ),
       oldToNew,
       removedEntryIds: plan.removedEntryIds,
       editedEntryIds: plan.editedEntryIds,
       editedReasoningEntryIds: plan.editedReasoningEntryIds,
+      removedBlockCount: plan.removedBlockCount,
       removedReasoningCount: plan.removedReasoningCount,
       insertedEntryIds,
       insertedNoteIds,
@@ -303,6 +316,29 @@ export async function applySurgery(
       { cause: error, recoveryEntryId },
     );
   }
+}
+
+function removedBlockLength(
+  plan: SurgeryPlan,
+  operation: Extract<
+    SurgeryPlan["operations"][number],
+    { kind: "remove-block" }
+  >,
+): number {
+  const entry = plan.sourcePath.find(
+    (candidate) => candidate.id === operation.entryId,
+  );
+  const message =
+    entry?.message && typeof entry.message === "object"
+      ? (entry.message as Record<string, unknown>)
+      : undefined;
+  const content =
+    message && Array.isArray(message.content) ? message.content : [];
+  const block = content[operation.blockIndex];
+  if (!block || typeof block !== "object") return 0;
+  const value =
+    operation.blockType === "thinking" ? block.thinking : block.text;
+  return typeof value === "string" ? value.length : 0;
 }
 
 function remapEntry(

@@ -2,8 +2,10 @@ import { planSurgery } from "../surgery/planner.js";
 import { applySurgery } from "../surgery/replay.js";
 import { activePath } from "../surgery/active-path.js";
 import {
+  assistantContentBlocks,
   buildLogicalUnits,
   editableTextBlocks,
+  reasoningBlockEligibility,
   reasoningBlocks,
   textBlockEligibility,
 } from "../surgery/logical-units.js";
@@ -202,7 +204,13 @@ export function patchTreeSelector(
         return;
       }
       if (!isActivePathEntry(selected.entry.id)) return;
-      toggleRemoval(state, selected.entry.id);
+      if (hasWholeRemoval(state, selected.entry.id)) {
+        toggleRemoval(state, selected.entry.id);
+      } else if (canOfferPartialRemoval(selected.entry)) {
+        beginPartialRemoval(this, state, selected.entry, list);
+      } else {
+        toggleRemoval(state, selected.entry.id);
+      }
       return;
     }
     if (keyData === "a" || keyData === "A") {
@@ -322,8 +330,16 @@ function patchTreeListDisplay(
     try {
       const display = displayAnnotations(entry, state, theme);
       const displayNode =
-        display.edits.length > 0 || display.reasoningEdits.length > 0
-          ? cloneDisplayNode(node, entry, display.edits, display.reasoningEdits)
+        display.edits.length > 0 ||
+        display.reasoningEdits.length > 0 ||
+        display.removedBlocks.length > 0
+          ? cloneDisplayNode(
+              node,
+              entry,
+              display.edits,
+              display.reasoningEdits,
+              display.removedBlocks,
+            )
           : node;
       const rendered = original.call(this, displayNode, isSelected);
       const reasoningPreview =
@@ -344,6 +360,10 @@ type DisplayAnnotations = {
     thinking: string;
     blockIndex: number;
     unsigned?: boolean;
+  }>;
+  removedBlocks: Array<{
+    blockIndex: number;
+    blockType: "text" | "thinking";
   }>;
   reasoningPreview: string;
   marker: string;
@@ -613,6 +633,10 @@ function cloneDisplayNode(
     blockIndex: number;
     unsigned?: boolean;
   }>,
+  removedBlocks: Array<{
+    blockIndex: number;
+    blockType: "text" | "thinking";
+  }>,
 ): unknown {
   const clonedEntry = structuredClone(entry) as SessionEntryLike;
   for (const edit of edits) {
@@ -627,6 +651,7 @@ function cloneDisplayNode(
       removeDisplaySignature(clonedEntry, edit.blockIndex, "thinking");
     }
   }
+  applyDisplayBlockRemovals(clonedEntry, removedBlocks);
   return { ...(node as Record<string, unknown>), entry: clonedEntry };
 }
 
@@ -697,6 +722,31 @@ function applyDisplayReasoningEdit(
     delete next.redacted;
     return [next];
   });
+}
+
+function applyDisplayBlockRemovals(
+  entry: SessionEntryLike,
+  removedBlocks: Array<{
+    blockIndex: number;
+    blockType: "text" | "thinking";
+  }>,
+): void {
+  if (
+    entry.type !== "message" ||
+    !entry.message ||
+    typeof entry.message !== "object" ||
+    !Array.isArray((entry.message as Record<string, unknown>).content)
+  ) {
+    return;
+  }
+  const byIndex = new Map(
+    removedBlocks.map((block) => [block.blockIndex, block.blockType]),
+  );
+  const content = (entry.message as Record<string, unknown>)
+    .content as unknown[];
+  (entry.message as Record<string, unknown>).content = content.filter(
+    (block, index) => !isObject(block) || byIndex.get(index) !== block.type,
+  );
 }
 
 function removeDisplaySignature(
@@ -773,6 +823,12 @@ function displayAnnotations(
       }
       return [];
     });
+  const removedBlocks: DisplayAnnotations["removedBlocks"] = operations.flatMap(
+    (operation) =>
+      operation.kind === "remove-block" && operation.entryId === entry.id
+        ? [{ blockIndex: operation.blockIndex, blockType: operation.blockType }]
+        : [],
+  );
   const isFirstEntry = (unit?.entryIds[0] ?? entry.id) === entry.id;
   const isLastEntry = (unit?.entryIds.at(-1) ?? entry.id) === entry.id;
   const removed = operations.some(
@@ -791,10 +847,17 @@ function displayAnnotations(
       isLastEntry,
   );
   const sourceReasoning = reasoningBlocks(entry);
+  const removedReasoning = removedBlocks.find(
+    (block) => block.blockType === "thinking",
+  );
   const stagedReasoning =
     reasoningEdits.find(
       (edit) => edit.blockIndex === sourceReasoning[0]?.blockIndex,
-    ) ?? reasoningEdits[0];
+    ) ??
+    reasoningEdits[0] ??
+    (removedReasoning
+      ? { thinking: "", blockIndex: removedReasoning.blockIndex }
+      : undefined);
   const previewBlock = stagedReasoning
     ? {
         text: stagedReasoning.thinking,
@@ -821,6 +884,12 @@ function displayAnnotations(
   const unsignedReasoning = reasoningEdits.some((edit) => edit.unsigned);
   const markers = [
     removed ? theme.fg("error", "[remove] ") : "",
+    removedBlocks.some((block) => block.blockType === "thinking")
+      ? theme.fg("error", "[remove reasoning] ")
+      : "",
+    removedBlocks.some((block) => block.blockType === "text")
+      ? theme.fg("error", "[remove answer] ")
+      : "",
     unsignedText
       ? theme.fg("warning", "[edit unsigned] ")
       : edits.length > 0
@@ -837,6 +906,7 @@ function displayAnnotations(
   return {
     edits,
     reasoningEdits,
+    removedBlocks,
     reasoningPreview,
     marker: markers.join(""),
   };
@@ -961,16 +1031,17 @@ function logicalUnitForEntry(entryId: string): LogicalUnitLike | undefined {
   );
 }
 
-function isBlockEdit(
-  operation: StagedOperation,
-): operation is Extract<
+function isBlockEdit(operation: StagedOperation): operation is Extract<
   StagedOperation,
-  { kind: "edit-text" | "edit-reasoning" | "edit-unsigned" }
+  {
+    kind: "edit-text" | "edit-reasoning" | "edit-unsigned" | "remove-block";
+  }
 > {
   return (
     operation.kind === "edit-text" ||
     operation.kind === "edit-reasoning" ||
-    operation.kind === "edit-unsigned"
+    operation.kind === "edit-unsigned" ||
+    operation.kind === "remove-block"
   );
 }
 
@@ -981,7 +1052,7 @@ function blockOperationKey(operation: StagedOperation): string | undefined {
   if (operation.kind === "edit-reasoning") {
     return `${operation.entryId}:${operation.blockIndex}:thinking`;
   }
-  if (operation.kind === "edit-unsigned") {
+  if (operation.kind === "edit-unsigned" || operation.kind === "remove-block") {
     return `${operation.entryId}:${operation.blockIndex}:${operation.blockType}`;
   }
   return undefined;
@@ -1063,6 +1134,27 @@ function unstageSelected(
   }
   if (state.operations.length === 0) state.snapshot = undefined;
   getExtensionContext()?.ui.notify("Selected tree action unstaged", "info");
+}
+
+function hasWholeRemoval(
+  state: ReturnType<typeof selectorState>,
+  entryId: string,
+): boolean {
+  const unit = logicalUnitForEntry(entryId);
+  return state.operations.some(
+    (operation) =>
+      operation.kind === "remove-unit" &&
+      operationTargetsUnit(operation, unit, entryId),
+  );
+}
+
+function canOfferPartialRemoval(entry: SessionEntryLike): boolean {
+  return (
+    entry.type === "message" &&
+    isObject(entry.message) &&
+    (entry.message as Record<string, unknown>).role === "assistant" &&
+    assistantContentBlocks(entry).length > 1
+  );
 }
 
 function toggleRemoval(
@@ -1322,6 +1414,16 @@ type EditChoice = {
   label: string;
 };
 
+type RemoveChoice = {
+  blockType: "text" | "thinking";
+  blockIndex: number;
+  text: string;
+  safe: boolean;
+  signedTarget?: boolean;
+  reason?: string;
+  label: string;
+};
+
 function existingBlockOperation(
   state: ReturnType<typeof selectorState>,
   entryId: string,
@@ -1336,6 +1438,222 @@ function existingBlockOperation(
   });
 }
 
+function beginPartialRemoval(
+  selector: SelectorLike,
+  state: ReturnType<typeof selectorState>,
+  entry: SessionEntryLike,
+  list: TreeListLike | undefined,
+): void {
+  const ctx = getExtensionContext();
+  if (!ctx?.hasUI) return;
+  const blocks = assistantContentBlocks(entry);
+  const choices: RemoveChoice[] = [
+    ...blocks
+      .filter((block) => block.blockType === "thinking")
+      .map((block) => {
+        const eligibility = reasoningBlockEligibility(entry, block.blockIndex);
+        return {
+          blockType: block.blockType,
+          blockIndex: block.blockIndex,
+          text: block.text,
+          safe: eligibility.eligible,
+          signedTarget: eligibility.signedTarget,
+          reason: eligibility.reason,
+          label: `Reasoning — ${previewChoiceText(block.text)}${
+            eligibility.signedTarget
+              ? " (provider-signed)"
+              : eligibility.eligible
+                ? ""
+                : ` (read-only: ${eligibility.reason ?? "unsupported"})`
+          }`,
+        };
+      }),
+    ...blocks
+      .filter((block) => block.blockType === "text")
+      .map((block) => {
+        const eligibility = textBlockEligibility(entry, block.blockIndex);
+        return {
+          blockType: block.blockType,
+          blockIndex: block.blockIndex,
+          text: block.text,
+          safe: eligibility.eligible,
+          signedTarget: eligibility.signedTarget,
+          reason: eligibility.reason,
+          label: `Answer text — ${previewChoiceText(block.text)}${
+            eligibility.signedTarget
+              ? " (provider-signed)"
+              : eligibility.eligible
+                ? ""
+                : ` (read-only: ${eligibility.reason ?? "unsupported"})`
+          }`,
+        };
+      }),
+  ];
+  if (choices.length <= 1) {
+    toggleRemoval(state, entry.id);
+    return;
+  }
+  state.flow = "block-choice";
+  showFlowComponent(
+    selector,
+    state,
+    [
+      "Delete:",
+      ...choices.map((choice, index) => `${index + 1}: ${choice.label}`),
+      `${choices.length + 1}: Entire assistant message`,
+      "Escape back to the tree",
+    ],
+    (data) => {
+      const selectedIndex = Number.parseInt(data, 10) - 1;
+      if (selectedIndex === choices.length) {
+        state.flowComponent?.finish();
+        toggleRemoval(state, entry.id);
+        return;
+      }
+      const choice = Number.isInteger(selectedIndex)
+        ? choices[selectedIndex]
+        : undefined;
+      if (!choice) return;
+      state.flowComponent?.finish();
+      if (choice.signedTarget) {
+        showSignedRemoval(selector, state, entry, choice, list);
+        return;
+      }
+      if (!choice.safe) {
+        ctx.ui.notify(
+          `This entry is read-only (${choice.reason ?? "unsupported"})`,
+          "warning",
+        );
+        return;
+      }
+      stageBlockRemoval(state, entry, choice, false, false);
+    },
+    () => undefined,
+    () => undefined,
+  );
+}
+
+function stageBlockRemoval(
+  state: ReturnType<typeof selectorState>,
+  entry: SessionEntryLike,
+  choice: RemoveChoice,
+  signatureDetached: boolean,
+  unsafe: boolean,
+): void {
+  const ctx = getExtensionContext();
+  const unit = logicalUnitForEntry(entry.id);
+  const existing = state.operations.find(
+    (operation) =>
+      operation.kind === "remove-block" &&
+      operation.entryId === entry.id &&
+      operation.blockIndex === choice.blockIndex &&
+      operation.blockType === choice.blockType,
+  );
+  if (existing) {
+    state.operations = state.operations.filter(
+      (operation) => operation !== existing,
+    );
+    if (state.operations.length === 0) state.snapshot = undefined;
+    ctx?.ui.notify("Partial block removal unstaged", "info");
+    return;
+  }
+  if (wouldRemoveFinalAssistantBlock(state, entry, choice)) {
+    ctx?.ui.notify(
+      "Cannot remove the final retained content block; choose Entire assistant message instead",
+      "warning",
+    );
+    return;
+  }
+  snapshotIfNeeded(state);
+  replaceOperationForUnit(state, unit, entry.id, {
+    kind: "remove-block",
+    entryId: entry.id,
+    blockIndex: choice.blockIndex,
+    blockType: choice.blockType,
+    signatureDetached,
+    unsafe,
+  });
+  ctx?.ui.notify(
+    signatureDetached
+      ? "Provider signature removed; future provider continuity may fail. Partial block removal staged"
+      : `Remove ${choice.blockType === "thinking" ? "reasoning" : "answer"} staged`,
+    signatureDetached ? "warning" : "info",
+  );
+}
+
+function wouldRemoveFinalAssistantBlock(
+  state: ReturnType<typeof selectorState>,
+  entry: SessionEntryLike,
+  choice: RemoveChoice,
+): boolean {
+  const blocks = assistantContentBlocks(entry);
+  if (blocks.length === 0) return true;
+  const targetKey = `${entry.id}:${choice.blockIndex}:${choice.blockType}`;
+  const alreadyRemoved = state.operations.some(
+    (operation) =>
+      operation.kind === "remove-block" &&
+      blockOperationKey(operation) === targetKey,
+  );
+  if (alreadyRemoved) return false;
+  const remaining = blocks.filter((block) => {
+    if (block.blockIndex === choice.blockIndex) return false;
+    return !state.operations.some((operation) => {
+      if (!isBlockEdit(operation) || operation.entryId !== entry.id) {
+        return false;
+      }
+      if (operation.kind === "edit-text") return false;
+      const blockType =
+        operation.kind === "edit-reasoning" ? "thinking" : operation.blockType;
+      if (
+        operation.blockIndex !== block.blockIndex ||
+        blockType !== block.blockType
+      ) {
+        return false;
+      }
+      return (
+        operation.kind === "remove-block" ||
+        (operation.kind === "edit-reasoning" &&
+          operation.thinking.trim().length === 0) ||
+        (operation.kind === "edit-unsigned" &&
+          operation.text.trim().length === 0 &&
+          operation.blockType === "thinking")
+      );
+    });
+  });
+  return remaining.length === 0;
+}
+
+function showSignedRemoval(
+  selector: SelectorLike,
+  state: ReturnType<typeof selectorState>,
+  entry: SessionEntryLike,
+  choice: RemoveChoice,
+  list: TreeListLike | undefined,
+): void {
+  const shown = showChoiceMenu(
+    selector,
+    state,
+    list,
+    "signed-removal",
+    "This block is provider-signed and cannot be removed safely. Remove it anyways?",
+    [
+      { value: "no", label: "No. Return to tree" },
+      {
+        value: "yes",
+        label: "Yes. Create an unsigned copy without this block",
+      },
+    ],
+    0,
+    (value) => {
+      if (value === "yes") {
+        stageBlockRemoval(state, entry, choice, true, true);
+      }
+    },
+    () => undefined,
+  );
+  if (!shown) return;
+}
+
 async function editEntry(
   selector: SelectorLike,
   state: ReturnType<typeof selectorState>,
@@ -1345,6 +1663,22 @@ async function editEntry(
   const ctx = getExtensionContext();
   if (!ctx?.hasUI) return;
   const choices: EditChoice[] = [
+    ...reasoningBlocks(entry).map((block) => ({
+      kind: "reasoning" as const,
+      blockType: "thinking" as const,
+      blockIndex: block.blockIndex,
+      text: block.text,
+      safe: block.safe,
+      signedTarget: block.signedTarget,
+      reason: block.reason,
+      label: `Reasoning — ${previewChoiceText(block.text)}${
+        block.signedTarget
+          ? " (provider-signed)"
+          : block.safe
+            ? ""
+            : ` (read-only: ${block.reason ?? "unsupported"})`
+      }`,
+    })),
     ...editableTextBlocks(entry).map((block) => {
       const eligibility = textBlockEligibility(entry, block.blockIndex);
       return {
@@ -1364,22 +1698,6 @@ async function editEntry(
         }`,
       };
     }),
-    ...reasoningBlocks(entry).map((block) => ({
-      kind: "reasoning" as const,
-      blockType: "thinking" as const,
-      blockIndex: block.blockIndex,
-      text: block.text,
-      safe: block.safe,
-      signedTarget: block.signedTarget,
-      reason: block.reason,
-      label: `Reasoning — ${previewChoiceText(block.text)}${
-        block.signedTarget
-          ? " (provider-signed)"
-          : block.safe
-            ? ""
-            : ` (read-only: ${block.reason ?? "unsupported"})`
-      }`,
-    })),
   ];
   if (choices.length === 0) {
     ctx.ui.notify(
@@ -1625,7 +1943,8 @@ type ChoiceFlow =
   | "save-review"
   | "exit-confirm"
   | "role-choice"
-  | "signed-override";
+  | "signed-override"
+  | "signed-removal";
 
 const choiceTheme = {
   selectedPrefix: (text: string) => text,

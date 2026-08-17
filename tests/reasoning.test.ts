@@ -314,6 +314,210 @@ describe("reasoning surgery", () => {
     expect(auditPreview(plan)).toContain("Remove 1 reasoning block");
   });
 
+  it("removes answer blocks while preserving signed reasoning", () => {
+    const entries = [
+      assistant([
+        { type: "thinking", thinking: "keep", thinkingSignature: "sig" },
+        { type: "text", text: "remove answer" },
+      ]),
+    ];
+    const original = structuredClone(entries);
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "remove-block",
+          entryId: "assistant",
+          blockIndex: 1,
+          blockType: "text",
+          signatureDetached: false,
+          unsafe: false,
+        },
+      ],
+    });
+    const replay = plan.replay.find((item) => item.kind === "entry");
+    if (replay?.kind !== "entry") throw new Error("expected replay entry");
+    expect((replay.entry.message as { content: unknown }).content).toEqual([
+      { type: "thinking", thinking: "keep", thinkingSignature: "sig" },
+    ]);
+    expect(entries).toEqual(original);
+    expect(plan.removedBlockCount).toBe(1);
+    expect(auditPreview(plan)).toContain("Remove 1 content block");
+  });
+
+  it("removes reasoning blocks and composes distinct block changes", () => {
+    const entries = [
+      assistant([
+        { type: "thinking", thinking: "remove thought" },
+        { type: "text", text: "keep answer" },
+        { type: "thinking", thinking: "edit thought" },
+      ]),
+    ];
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "remove-block",
+          entryId: "assistant",
+          blockIndex: 0,
+          blockType: "thinking",
+          signatureDetached: false,
+          unsafe: false,
+        },
+        {
+          kind: "edit-text",
+          entryId: "assistant",
+          blockIndex: 1,
+          text: "changed answer",
+        },
+        {
+          kind: "edit-reasoning",
+          entryId: "assistant",
+          blockIndex: 2,
+          thinking: "changed thought",
+        },
+      ],
+    });
+    const replay = plan.replay.find((item) => item.kind === "entry");
+    if (replay?.kind !== "entry") throw new Error("expected replay entry");
+    expect((replay.entry.message as { content: unknown }).content).toEqual([
+      { type: "text", text: "changed answer" },
+      { type: "thinking", thinking: "changed thought" },
+    ]);
+  });
+
+  it("requires an explicit unsafe fact for signed block removal", () => {
+    const entries = [
+      assistant([
+        { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+        { type: "text", text: "answer" },
+      ]),
+    ];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "remove-block",
+            entryId: "assistant",
+            blockIndex: 0,
+            blockType: "thinking",
+            signatureDetached: false,
+            unsafe: false,
+          },
+        ],
+      }),
+    ).toThrow("requires explicit unsigned removal");
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "remove-block",
+          entryId: "assistant",
+          blockIndex: 0,
+          blockType: "thinking",
+          signatureDetached: true,
+          unsafe: true,
+        },
+      ],
+    });
+    const replay = plan.replay.find((item) => item.kind === "entry");
+    if (replay?.kind !== "entry") throw new Error("expected replay entry");
+    expect((replay.entry.message as { content: unknown }).content).toEqual([
+      { type: "text", text: "answer" },
+    ]);
+    expect(plan.warnings.join(" ")).toContain("provider continuity may fail");
+  });
+
+  it("rejects forged overlapping block removal and edit operations", () => {
+    const entries = [
+      assistant([
+        { type: "thinking", thinking: "thought" },
+        { type: "text", text: "answer" },
+      ]),
+    ];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "remove-block",
+            entryId: "assistant",
+            blockIndex: 1,
+            blockType: "text",
+            signatureDetached: false,
+            unsafe: false,
+          },
+          {
+            kind: "edit-text",
+            entryId: "assistant",
+            blockIndex: 1,
+            text: "changed",
+          },
+        ],
+      }),
+    ).toThrow("content block");
+  });
+
+  it("protects unsigned reasoning beside another signature and rejects empty results", () => {
+    const entries = [
+      assistant([
+        { type: "thinking", thinking: "protected" },
+        { type: "text", text: "signed", textSignature: "sig" },
+      ]),
+    ];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "remove-block",
+            entryId: "assistant",
+            blockIndex: 0,
+            blockType: "thinking",
+            signatureDetached: false,
+            unsafe: false,
+          },
+        ],
+      }),
+    ).toThrow("read-only");
+    expect(() =>
+      planSurgery({
+        entries: [
+          assistant([
+            { type: "thinking", thinking: "one" },
+            { type: "text", text: "two" },
+          ]),
+        ],
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "remove-block",
+            entryId: "assistant",
+            blockIndex: 0,
+            blockType: "thinking",
+            signatureDetached: false,
+            unsafe: false,
+          },
+          {
+            kind: "remove-block",
+            entryId: "assistant",
+            blockIndex: 1,
+            blockType: "text",
+            signatureDetached: false,
+            unsafe: false,
+          },
+        ],
+      }),
+    ).toThrow("without content blocks");
+  });
+
   it("edits an unsigned answer beside signed reasoning without touching the signature", () => {
     const entries = [
       assistant([

@@ -3,6 +3,7 @@ import { activePath, indexEntries, pathEntryMap } from "./active-path.js";
 import {
   assertEditable,
   buildLogicalUnits,
+  assistantContentBlocks,
   editableTextBlocks,
   reasoningBlockEligibility,
   reasoningBlocks,
@@ -68,6 +69,16 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
   const unsignedEdited = new Map<
     string,
     { blockIndex: number; blockType: "text" | "thinking"; text: string }
+  >();
+  const removedBlocks = new Map<
+    string,
+    {
+      blockIndex: number;
+      blockType: "text" | "thinking";
+      signatureDetached: boolean;
+      unsafe: boolean;
+      originalLength: number;
+    }
   >();
   const claimedBlockTargets = new Set<string>();
   const inserts: Array<
@@ -249,6 +260,81 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
       continue;
     }
 
+    if (operation.kind === "remove-block") {
+      const entry = sourceById.get(operation.entryId);
+      const unit = entryToUnit.get(operation.entryId);
+      if (!entry || !unit || !pathIndices.has(operation.entryId)) {
+        throw new SurgeryError(
+          "OFF_PATH_TARGET",
+          `Entry ${operation.entryId} is not on the active path`,
+        );
+      }
+      if (removedUnits.has(unit.id)) {
+        throw new SurgeryError(
+          "CONFLICTING_OPERATION",
+          `Entry ${entry.id} is already marked for removal`,
+        );
+      }
+      const block = assistantContentBlocks(entry).find(
+        (candidate) => candidate.blockIndex === operation.blockIndex,
+      );
+      if (!block || block.blockType !== operation.blockType) {
+        throw new SurgeryError(
+          "INVALID_BLOCK_REMOVAL",
+          `Entry ${entry.id} has no removable ${operation.blockType} block at index ${operation.blockIndex}`,
+        );
+      }
+      const eligibility =
+        operation.blockType === "text"
+          ? textBlockEligibility(entry, operation.blockIndex)
+          : reasoningBlockEligibility(entry, operation.blockIndex);
+      if (
+        typeof operation.signatureDetached !== "boolean" ||
+        typeof operation.unsafe !== "boolean" ||
+        operation.signatureDetached !== operation.unsafe
+      ) {
+        throw new SurgeryError(
+          "INVALID_BLOCK_REMOVAL",
+          "Block removal signature-detach and unsafe facts must agree",
+        );
+      }
+      if (eligibility.signedTarget) {
+        if (!operation.unsafe || !operation.signatureDetached) {
+          throw new SurgeryError(
+            "SIGNED_BLOCK_REQUIRES_UNSIGNED_COPY",
+            `Block ${entry.id}:${operation.blockIndex} requires explicit unsigned removal`,
+          );
+        }
+      } else {
+        if (operation.unsafe || operation.signatureDetached) {
+          throw new SurgeryError(
+            "INVALID_BLOCK_REMOVAL",
+            `Block ${entry.id}:${operation.blockIndex} is not provider-signed`,
+          );
+        }
+        if (!eligibility.eligible) {
+          throw new SurgeryError(
+            "BLOCK_REMOVAL_PROTECTED",
+            `Assistant ${operation.blockType} block is read-only (${eligibility.reason ?? "unsupported"})`,
+          );
+        }
+      }
+      claimBlockTarget(
+        claimedBlockTargets,
+        `${entry.id}:${operation.blockIndex}:${operation.blockType}`,
+        operation,
+      );
+      removedBlocks.set(`${entry.id}:${operation.blockIndex}`, {
+        blockIndex: operation.blockIndex,
+        blockType: operation.blockType,
+        signatureDetached: operation.signatureDetached,
+        unsafe: operation.unsafe,
+        originalLength: block.text.length,
+      });
+      affectedIndices.push(pathIndices.get(entry.id)!);
+      continue;
+    }
+
     if (operation.kind === "remove-unit") {
       const unit =
         unitById.get(operation.unitId) ?? entryToUnit.get(operation.unitId);
@@ -338,6 +424,7 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     ...edited.keys(),
     ...reasoningEdited.keys(),
     ...unsignedEdited.keys(),
+    ...removedBlocks.keys(),
   ]) {
     const entryId = key.split(":", 1)[0];
     const unit = entryToUnit.get(entryId);
@@ -391,7 +478,9 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
         edited,
         reasoningEdited,
         unsignedEdited,
+        removedBlocks,
       );
+      validateAssistantContent(editedEntry);
       replay.push({ kind: "entry", sourceId: entry.id, entry: editedEntry });
     }
     if (entry.id === unit.entries[unit.entries.length - 1].id) {
@@ -407,15 +496,19 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
   const removedEntryIds = units
     .filter((unit) => removedUnits.has(unit.id))
     .flatMap((unit) => unit.entryIds);
-  const editedEntryIds = [...edited.keys(), ...unsignedEdited.keys()].map(
-    (key) => key.split(":", 1)[0],
-  );
+  const editedEntryIds = [
+    ...edited.keys(),
+    ...unsignedEdited.keys(),
+    ...removedBlocks.keys(),
+  ].map((key) => key.split(":", 1)[0]);
   const unsignedEditedEntryIds = [...unsignedEdited.keys()].map(
     (key) => key.split(":", 1)[0],
   );
+  const removedBlockValues = [...removedBlocks.values()];
   const warnings = [
     ...opaqueReferenceWarnings(sourcePath, earliestAffectedIndex),
-    ...(unsignedEdited.size > 0
+    ...(unsignedEdited.size > 0 ||
+    removedBlockValues.some((block) => block.signatureDetached)
       ? [
           "A provider signature was removed from an assistant block; future provider continuity may fail.",
         ]
@@ -449,13 +542,19 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
       ),
     ],
     unsignedEditedEntryIds: [...new Set(unsignedEditedEntryIds)],
-    unsignedDetachCount: unsignedEdited.size,
-    removedReasoningCount: [
-      ...reasoningEdited.values(),
-      ...[...unsignedEdited.values()]
-        .filter((edit) => edit.blockType === "thinking")
-        .map((edit) => ({ thinking: edit.text })),
-    ].filter((edit) => edit.thinking.trim().length === 0).length,
+    unsignedDetachCount:
+      unsignedEdited.size +
+      removedBlockValues.filter((block) => block.signatureDetached).length,
+    removedBlockCount: removedBlockValues.length,
+    removedReasoningCount:
+      removedBlockValues.filter((block) => block.blockType === "thinking")
+        .length +
+      [
+        ...reasoningEdited.values(),
+        ...[...unsignedEdited.values()]
+          .filter((edit) => edit.blockType === "thinking")
+          .map((edit) => ({ thinking: edit.text })),
+      ].filter((edit) => edit.thinking.trim().length === 0).length,
     insertedEntryIds: inserts.map((_, index) => `insert-${index + 1}`),
     insertedNoteIds: inserts
       .map((insert, index) =>
@@ -528,6 +627,16 @@ function applyEdits(
     string,
     { blockIndex: number; blockType: "text" | "thinking"; text: string }
   >,
+  removedBlocks: Map<
+    string,
+    {
+      blockIndex: number;
+      blockType: "text" | "thinking";
+      signatureDetached: boolean;
+      unsafe: boolean;
+      originalLength: number;
+    }
+  >,
 ): SessionEntryLike {
   const entryEdits = [...edits.entries()]
     .filter(([key]) => key.startsWith(`${entry.id}:`))
@@ -538,10 +647,14 @@ function applyEdits(
   const entryUnsignedEdits = [...unsignedEdits.entries()]
     .filter(([key]) => key.startsWith(`${entry.id}:`))
     .map(([, value]) => value);
+  const entryRemovedBlocks = [...removedBlocks.entries()]
+    .filter(([key]) => key.startsWith(`${entry.id}:`))
+    .map(([, value]) => value);
   if (
     entryEdits.length === 0 &&
     entryReasoningEdits.length === 0 &&
-    entryUnsignedEdits.length === 0
+    entryUnsignedEdits.length === 0 &&
+    entryRemovedBlocks.length === 0
   ) {
     return clone(entry);
   }
@@ -551,7 +664,13 @@ function applyEdits(
     return result;
   }
   if (result.type === "custom_message") {
-    result.content = applyMessageEdits(result.content, entryEdits, [], []);
+    result.content = applyMessageEdits(
+      result.content,
+      entryEdits,
+      [],
+      [],
+      entryRemovedBlocks,
+    );
     return result;
   }
   if (isObject(result.message)) {
@@ -563,6 +682,7 @@ function applyEdits(
         entryEdits,
         entryReasoningEdits,
         entryUnsignedEdits,
+        entryRemovedBlocks,
       ),
     };
     if (nextMessage.role === "assistant") {
@@ -592,6 +712,10 @@ function applyMessageEdits(
     blockType: "text" | "thinking";
     text: string;
   }>,
+  removedBlocks: Array<{
+    blockIndex: number;
+    blockType: "text" | "thinking";
+  }>,
 ): unknown {
   if (!Array.isArray(content)) {
     return typeof content === "string"
@@ -601,7 +725,8 @@ function applyMessageEdits(
   if (
     textEdits.length === 0 &&
     reasoningEdits.length === 0 &&
-    unsignedEdits.length === 0
+    unsignedEdits.length === 0 &&
+    removedBlocks.length === 0
   ) {
     return content;
   }
@@ -614,7 +739,14 @@ function applyMessageEdits(
   const unsignedByIndex = new Map(
     unsignedEdits.map((edit) => [edit.blockIndex, edit]),
   );
+  const removedByIndex = new Map(
+    removedBlocks.map((block) => [block.blockIndex, block]),
+  );
   return content.flatMap((block, index) => {
+    const removed = removedByIndex.get(index);
+    if (removed && isObject(block) && block.type === removed.blockType) {
+      return [];
+    }
     if (!isObject(block)) return [block];
     const text = textByIndex.get(index);
     const thinking = reasoningByIndex.get(index);
@@ -651,6 +783,18 @@ function applyMessageEdits(
     }
     return [next];
   });
+}
+
+function validateAssistantContent(entry: SessionEntryLike): void {
+  if (entry.type !== "message" || !isObject(entry.message)) return;
+  const message = entry.message as Record<string, unknown>;
+  if (message.role !== "assistant") return;
+  if (Array.isArray(message.content) && message.content.length === 0) {
+    throw new SurgeryError(
+      "EMPTY_ASSISTANT_CONTENT",
+      `Assistant entry ${entry.id} cannot be left without content blocks`,
+    );
+  }
 }
 
 function validateCompactionBoundaries(

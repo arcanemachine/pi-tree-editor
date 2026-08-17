@@ -54,6 +54,15 @@ export type UnsignedEditOperation = {
   text: string;
 };
 
+export type RemoveBlockOperation = {
+  kind: "remove-block";
+  entryId: string;
+  blockIndex: number;
+  blockType: "text" | "thinking";
+  signatureDetached: boolean;
+  unsafe: boolean;
+};
+
 export type SurgeryOperation =
   | {
       kind: "edit-text";
@@ -68,6 +77,7 @@ export type SurgeryOperation =
       thinking: string;
     }
   | UnsignedEditOperation
+  | RemoveBlockOperation
   | { kind: "remove-unit"; unitId: string }
   | InsertOperation
   | InsertNoteOperation;
@@ -123,6 +133,7 @@ export type SurgeryPlan = {
   editedReasoningEntryIds: string[];
   unsignedEditedEntryIds: string[];
   unsignedDetachCount: number;
+  removedBlockCount: number;
   removedReasoningCount: number;
   insertedEntryIds: string[];
   insertedNoteIds: string[];
