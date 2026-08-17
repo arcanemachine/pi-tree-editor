@@ -100,6 +100,170 @@ describe("reasoning surgery", () => {
     expect(auditPreview(plan)).toContain("Change 1 reasoning entry");
   });
 
+  it("replays answer and reasoning edits on one assistant entry together", () => {
+    const entries = [
+      assistant([
+        { type: "thinking", thinking: "old thought" },
+        { type: "text", text: "old answer" },
+      ]),
+    ];
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "edit-text",
+          entryId: "assistant",
+          blockIndex: 1,
+          text: "new answer",
+        },
+        {
+          kind: "edit-reasoning",
+          entryId: "assistant",
+          blockIndex: 0,
+          thinking: "new thought",
+        },
+      ],
+    });
+    const replay = plan.replay.find((item) => item.kind === "entry");
+    if (replay?.kind !== "entry") throw new Error("expected replay entry");
+    expect((replay.entry.message as { content: unknown }).content).toEqual([
+      { type: "thinking", thinking: "new thought" },
+      { type: "text", text: "new answer" },
+    ]);
+    expect(plan.operations).toMatchObject([
+      { kind: "edit-text", blockIndex: 1 },
+      { kind: "edit-reasoning", blockIndex: 0 },
+    ]);
+  });
+
+  it("edits multiple answer text blocks independently", () => {
+    const entries = [
+      assistant([
+        { type: "text", text: "first" },
+        { type: "text", text: "second" },
+      ]),
+    ];
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "edit-text",
+          entryId: "assistant",
+          blockIndex: 0,
+          text: "first changed",
+        },
+        {
+          kind: "edit-text",
+          entryId: "assistant",
+          blockIndex: 1,
+          text: "second changed",
+        },
+      ],
+    });
+    const replay = plan.replay.find((item) => item.kind === "entry");
+    if (replay?.kind !== "entry") throw new Error("expected replay entry");
+    expect((replay.entry.message as { content: unknown }).content).toEqual([
+      { type: "text", text: "first changed" },
+      { type: "text", text: "second changed" },
+    ]);
+  });
+
+  it("rejects duplicate edits for one exact block target", () => {
+    const entries = [assistant([{ type: "text", text: "answer" }])];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "edit-text",
+            entryId: "assistant",
+            blockIndex: 0,
+            text: "first",
+          },
+          {
+            kind: "edit-text",
+            entryId: "assistant",
+            blockIndex: 0,
+            text: "second",
+          },
+        ],
+      }),
+    ).toThrow("content block");
+    const signed = [
+      assistant([
+        { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+      ]),
+    ];
+    expect(() =>
+      planSurgery({
+        entries: signed,
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "edit-unsigned",
+            entryId: "assistant",
+            blockIndex: 0,
+            blockType: "thinking",
+            text: "copy",
+          },
+          {
+            kind: "edit-unsigned",
+            entryId: "assistant",
+            blockIndex: 0,
+            blockType: "thinking",
+            text: "copy again",
+          },
+        ],
+      }),
+    ).toThrow("content block");
+    const signedText = [
+      assistant([{ type: "text", text: "signed", textSignature: "sig" }]),
+    ];
+    expect(() =>
+      planSurgery({
+        entries: signedText,
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "edit-unsigned",
+            entryId: "assistant",
+            blockIndex: 0,
+            blockType: "text",
+            text: "copy",
+          },
+          {
+            kind: "edit-text",
+            entryId: "assistant",
+            blockIndex: 0,
+            text: "ordinary",
+          },
+        ],
+      }),
+    ).toThrow(/read-only|content block/);
+  });
+
+  it("rejects block edits that overlap a unit removal", () => {
+    const entries = [assistant([{ type: "text", text: "answer" }])];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "assistant",
+        operations: [
+          {
+            kind: "edit-text",
+            entryId: "assistant",
+            blockIndex: 0,
+            text: "changed",
+          },
+          { kind: "remove-unit", unitId: "assistant" },
+        ],
+      }),
+    ).toThrow(/edited and removed|already marked for removal/);
+  });
+
   it("rejects removing the sole reasoning content block", () => {
     const entries = [
       assistant([{ type: "thinking", thinking: "only thought" }]),

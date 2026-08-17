@@ -69,6 +69,7 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     string,
     { blockIndex: number; blockType: "text" | "thinking"; text: string }
   >();
+  const claimedBlockTargets = new Set<string>();
   const inserts: Array<
     | Extract<SurgeryOperation, { kind: "insert" }>
     | Extract<SurgeryOperation, { kind: "insert-note" }>
@@ -117,6 +118,12 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
       if (typeof operation.text !== "string") {
         throw new SurgeryError("INVALID_TEXT", "Edited text must be a string");
       }
+      operation.blockIndex = blockIndex;
+      claimBlockTarget(
+        claimedBlockTargets,
+        `${entry.id}:${blockIndex}:text`,
+        operation,
+      );
       edited.set(`${entry.id}:${blockIndex}`, {
         blockIndex,
         text: operation.text,
@@ -174,6 +181,11 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
           "Cannot remove the only content block from an assistant entry",
         );
       }
+      claimBlockTarget(
+        claimedBlockTargets,
+        `${entry.id}:${operation.blockIndex}:thinking`,
+        operation,
+      );
       reasoningEdited.set(`${entry.id}:${operation.blockIndex}`, {
         blockIndex: operation.blockIndex,
         thinking: operation.thinking,
@@ -223,6 +235,11 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
           "Cannot remove the only content block from an assistant entry",
         );
       }
+      claimBlockTarget(
+        claimedBlockTargets,
+        `${entry.id}:${operation.blockIndex}:${operation.blockType}`,
+        operation,
+      );
       unsignedEdited.set(`${entry.id}:${operation.blockIndex}`, {
         blockIndex: operation.blockIndex,
         blockType: operation.blockType,
@@ -330,28 +347,6 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
         `Entry ${entryId} is both edited and removed`,
       );
     }
-  }
-  const claimedActions = new Map<string, SurgeryOperation>();
-  for (const operation of normalized) {
-    const unit =
-      operation.kind === "edit-text" ||
-      operation.kind === "edit-reasoning" ||
-      operation.kind === "edit-unsigned"
-        ? entryToUnit.get(operation.entryId)
-        : operation.kind === "remove-unit"
-          ? (unitById.get(operation.unitId) ??
-            entryToUnit.get(operation.unitId))
-          : (unitById.get(operation.anchorUnitId) ??
-            entryToUnit.get(operation.anchorUnitId));
-    if (!unit) continue;
-    const previous = claimedActions.get(unit.id);
-    if (previous) {
-      throw new SurgeryError(
-        "CONFLICTING_OPERATION",
-        `Multiple staged actions target logical unit ${unit.id}`,
-      );
-    }
-    claimedActions.set(unit.id, operation);
   }
   validateCompactionBoundaries(sourcePath, unitById, removedUnits);
 
@@ -474,6 +469,21 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
   };
 }
 
+function claimBlockTarget(
+  claimed: Set<string>,
+  targetKey: string,
+  operation: SurgeryOperation,
+): void {
+  if (claimed.has(targetKey)) {
+    throw new SurgeryError(
+      "CONFLICTING_OPERATION",
+      `Multiple staged edits target content block ${targetKey}`,
+      { targetKey, operationKind: operation.kind },
+    );
+  }
+  claimed.add(targetKey);
+}
+
 function isSoleReasoningBlock(
   entry: SessionEntryLike,
   blockIndex: number,
@@ -541,20 +551,17 @@ function applyEdits(
     return result;
   }
   if (result.type === "custom_message") {
-    result.content = replaceContent(result.content, entryEdits);
+    result.content = applyMessageEdits(result.content, entryEdits, [], []);
     return result;
   }
   if (isObject(result.message)) {
+    const originalMessage = result.message as Record<string, unknown>;
     const nextMessage: Record<string, unknown> = {
-      ...(result.message as Record<string, unknown>),
-      content: replaceUnsignedContent(
-        replaceReasoning(
-          replaceContent(
-            (result.message as Record<string, unknown>).content,
-            entryEdits,
-          ),
-          entryReasoningEdits,
-        ),
+      ...originalMessage,
+      content: applyMessageEdits(
+        originalMessage.content,
+        entryEdits,
+        entryReasoningEdits,
         entryUnsignedEdits,
       ),
     };
@@ -576,67 +583,74 @@ function applyEdits(
   return result;
 }
 
-function replaceReasoning(
+function applyMessageEdits(
   content: unknown,
-  edits: Array<{ blockIndex: number; thinking: string }>,
-): unknown {
-  if (!Array.isArray(content) || edits.length === 0) return content;
-  const byIndex = new Map(
-    edits.map((edit) => [edit.blockIndex, edit.thinking]),
-  );
-  return content.flatMap((block, index) => {
-    if (!isObject(block) || block.type !== "thinking" || !byIndex.has(index)) {
-      return [block];
-    }
-    const thinking = byIndex.get(index) ?? "";
-    if (thinking.trim().length === 0) return [];
-    const next: Record<string, unknown> = { ...block, thinking };
-    delete next.thinkingSignature;
-    delete next.redacted;
-    return [next];
-  });
-}
-
-function replaceUnsignedContent(
-  content: unknown,
-  edits: Array<{
+  textEdits: Array<{ blockIndex: number; text: string }>,
+  reasoningEdits: Array<{ blockIndex: number; thinking: string }>,
+  unsignedEdits: Array<{
     blockIndex: number;
     blockType: "text" | "thinking";
     text: string;
   }>,
 ): unknown {
-  if (!Array.isArray(content) || edits.length === 0) return content;
-  const byIndex = new Map(edits.map((edit) => [edit.blockIndex, edit]));
+  if (!Array.isArray(content)) {
+    return typeof content === "string"
+      ? (textEdits[0]?.text ?? content)
+      : content;
+  }
+  if (
+    textEdits.length === 0 &&
+    reasoningEdits.length === 0 &&
+    unsignedEdits.length === 0
+  ) {
+    return content;
+  }
+  const textByIndex = new Map(
+    textEdits.map((edit) => [edit.blockIndex, edit.text]),
+  );
+  const reasoningByIndex = new Map(
+    reasoningEdits.map((edit) => [edit.blockIndex, edit.thinking]),
+  );
+  const unsignedByIndex = new Map(
+    unsignedEdits.map((edit) => [edit.blockIndex, edit]),
+  );
   return content.flatMap((block, index) => {
-    const edit = byIndex.get(index);
-    if (!edit || !isObject(block) || block.type !== edit.blockType) {
+    if (!isObject(block)) return [block];
+    const text = textByIndex.get(index);
+    const thinking = reasoningByIndex.get(index);
+    const unsigned = unsignedByIndex.get(index);
+    if (
+      text === undefined &&
+      thinking === undefined &&
+      unsigned === undefined
+    ) {
       return [block];
     }
     const next: Record<string, unknown> = { ...block };
-    if (edit.blockType === "text") {
-      next.text = edit.text;
-      delete next.textSignature;
-    } else {
-      if (edit.text.trim().length === 0) return [];
-      next.thinking = edit.text;
+    if (text !== undefined && next.type === "text") next.text = text;
+    if (unsigned && next.type === unsigned.blockType) {
+      if (
+        unsigned.blockType === "thinking" &&
+        unsigned.text.trim().length === 0
+      ) {
+        return [];
+      }
+      if (unsigned.blockType === "text") {
+        next.text = unsigned.text;
+        delete next.textSignature;
+      } else {
+        next.thinking = unsigned.text;
+        delete next.thinkingSignature;
+      }
+    }
+    if (thinking !== undefined && next.type === "thinking") {
+      if (thinking.trim().length === 0) return [];
+      next.thinking = thinking;
       delete next.thinkingSignature;
+      delete next.redacted;
     }
     return [next];
   });
-}
-
-function replaceContent(
-  content: unknown,
-  edits: Array<{ blockIndex: number; text: string }>,
-): unknown {
-  if (typeof content === "string") return edits[0]?.text ?? content;
-  if (!Array.isArray(content)) return content;
-  const byIndex = new Map(edits.map((edit) => [edit.blockIndex, edit.text]));
-  return content.map((block, index) =>
-    isObject(block) && block.type === "text" && byIndex.has(index)
-      ? { ...block, text: byIndex.get(index) }
-      : block,
-  );
 }
 
 function validateCompactionBoundaries(

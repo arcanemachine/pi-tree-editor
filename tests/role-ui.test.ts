@@ -267,6 +267,97 @@ describe("role-based staged rows", () => {
     expect(selector.render(100).join("\n")).not.toContain("[edit unsigned]");
   });
 
+  it("coexists answer and signed reasoning edits with exact target latest-wins", async () => {
+    const { selector, manager, leafId } = await selectorFor(true, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "answer" },
+        {
+          type: "thinking",
+          thinking: "signed thought",
+          thinkingSignature: "sig",
+        },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+    });
+    const original = structuredClone(manager.getEntries());
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    selector.handleInput("1");
+    setInlineText(selector, "changed answer");
+    selector.handleInput("\r");
+    selector.handleInput("e");
+    selector.handleInput("1");
+    const prefill = selectorState(selector).inlineInput?.input as unknown as {
+      getValue?: () => string;
+    };
+    expect(prefill.getValue?.()).toBe("changed answer");
+    setInlineText(selector, "re-edited answer");
+    selector.handleInput("\r");
+    selector.handleInput("e");
+    selector.handleInput("2");
+    selector.handleInput("\u001b[B");
+    selector.handleInput("\r");
+    setInlineText(selector, "changed thought");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 0,
+        text: "re-edited answer",
+      },
+      {
+        kind: "edit-unsigned",
+        entryId: leafId,
+        blockIndex: 1,
+        blockType: "thinking",
+        text: "changed thought",
+      },
+    ]);
+    const display = selector.render(100).join("\n");
+    expect(display).toContain("[edit]");
+    expect(display).toContain("[edit reasoning unsigned]");
+    expect(display).toContain("re-edited answer");
+    expect(display).toContain("changed thought");
+    for (const width of [100, 48, 24, 12, 4]) {
+      expect(
+        selector
+          .render(width)
+          .every((line: string) => visibleWidth(line) <= width),
+      ).toBe(true);
+    }
+    selector.handleInput("d");
+    expect(selectorState(selector).operations).toEqual([
+      { kind: "remove-unit", unitId: leafId },
+    ]);
+    selector.handleInput("e");
+    selector.handleInput("1");
+    setInlineText(selector, "replacement");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 0,
+        text: "replacement",
+      },
+    ]);
+    expect(selector.render(100).join("\n")).not.toContain("[remove]");
+    selector.handleInput("e");
+    selector.handleInput("2");
+    selector.handleInput("\u001b[B");
+    selector.handleInput("\r");
+    setInlineText(selector, "replacement thought");
+    selector.handleInput("\r");
+    expect(selectorState(selector).operations).toHaveLength(2);
+    selector.handleInput("u");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(manager.getEntries()).toEqual(original);
+  });
+
   it("offers the same unsigned-copy menu for directly signed reasoning", async () => {
     const { selector } = await selectorFor(true, {
       role: "assistant",

@@ -181,6 +181,78 @@ describe("applySurgery", () => {
     ]);
   });
 
+  it("replays answer and signed reasoning edits together", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "assistant",
+        parentId: null,
+        timestamp: "old",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "old answer" },
+            {
+              type: "thinking",
+              thinking: "signed thought",
+              thinkingSignature: "secret-thinking-signature",
+            },
+            {
+              type: "text",
+              text: "keep this",
+              textSignature: "keep-signature",
+            },
+          ],
+          stopReason: "stop",
+        },
+      },
+    ] as SessionEntryLike[];
+    const before = structuredClone(entries);
+    const manager = new FakeManager(entries, "assistant");
+    const plan = planSurgery({
+      entries,
+      leafId: "assistant",
+      operations: [
+        {
+          kind: "edit-text",
+          entryId: "assistant",
+          blockIndex: 0,
+          text: "new answer",
+        },
+        {
+          kind: "edit-unsigned",
+          entryId: "assistant",
+          blockIndex: 1,
+          blockType: "thinking",
+          text: "new thought",
+        },
+      ],
+    });
+    const result = await applySurgery(manager, plan);
+    expect(manager.entries.find((entry) => entry.id === "assistant")).toEqual(
+      before[0],
+    );
+    const edited = manager.entries.find((entry) => entry.id === "new-1");
+    expect((edited?.message as { content: unknown }).content).toEqual([
+      { type: "text", text: "new answer" },
+      { type: "thinking", thinking: "new thought" },
+      { type: "text", text: "keep this", textSignature: "keep-signature" },
+    ]);
+    const audit = manager.entries.find(
+      (entry) => entry.id === result.auditEntryId,
+    );
+    const auditText = JSON.stringify(audit?.data);
+    expect(auditText).toContain('"kind":"edit-text"');
+    expect(auditText).toContain('"kind":"edit-unsigned"');
+    expect(auditText).toContain('"blockType":"thinking"');
+    expect(auditText).toContain('"textLength":10');
+    expect(auditText).toContain('"textLength":11');
+    expect(auditText).not.toContain("old answer");
+    expect(auditText).not.toContain("new answer");
+    expect(auditText).not.toContain("secret-thinking-signature");
+    expect(plan.replay).toHaveLength(1);
+  });
+
   it("detaches a signed block append-only and sanitizes audit data", async () => {
     const entries = [
       {

@@ -710,63 +710,89 @@ function displayAnnotations(
   theme: DisplayTheme,
 ): DisplayAnnotations {
   const unit = logicalUnitForEntry(entry.id);
-  const operation = state.operations.find((candidate) =>
-    operationTargetsUnit(candidate, unit, entry.id),
+  const operations = state.operations.filter((operation) =>
+    operationTargetsEntry(operation, unit, entry.id),
   );
-  const edits: DisplayAnnotations["edits"] =
-    operation?.kind === "edit-text" && operation.entryId === entry.id
-      ? [{ text: operation.text, blockIndex: operation.blockIndex }]
-      : operation?.kind === "edit-unsigned" &&
-          operation.entryId === entry.id &&
-          operation.blockType === "text"
-        ? [
-            {
-              text: operation.text,
-              blockIndex: operation.blockIndex,
-              unsigned: true,
-            },
-          ]
-        : [];
+  const edits: DisplayAnnotations["edits"] = operations.flatMap((operation) => {
+    if (operation.kind === "edit-text" && operation.entryId === entry.id) {
+      return [{ text: operation.text, blockIndex: operation.blockIndex }];
+    }
+    if (
+      operation.kind === "edit-unsigned" &&
+      operation.entryId === entry.id &&
+      operation.blockType === "text"
+    ) {
+      return [
+        {
+          text: operation.text,
+          blockIndex: operation.blockIndex,
+          unsigned: true,
+        },
+      ];
+    }
+    return [];
+  });
   const reasoningEdits: DisplayAnnotations["reasoningEdits"] =
-    operation?.kind === "edit-reasoning" && operation.entryId === entry.id
-      ? [{ thinking: operation.thinking, blockIndex: operation.blockIndex }]
-      : operation?.kind === "edit-unsigned" &&
-          operation.entryId === entry.id &&
-          operation.blockType === "thinking"
-        ? [
-            {
-              thinking: operation.text,
-              blockIndex: operation.blockIndex,
-              unsigned: true,
-            },
-          ]
-        : [];
+    operations.flatMap((operation) => {
+      if (
+        operation.kind === "edit-reasoning" &&
+        operation.entryId === entry.id
+      ) {
+        return [
+          { thinking: operation.thinking, blockIndex: operation.blockIndex },
+        ];
+      }
+      if (
+        operation.kind === "edit-unsigned" &&
+        operation.entryId === entry.id &&
+        operation.blockType === "thinking"
+      ) {
+        return [
+          {
+            thinking: operation.text,
+            blockIndex: operation.blockIndex,
+            unsigned: true,
+          },
+        ];
+      }
+      return [];
+    });
   const isFirstEntry = (unit?.entryIds[0] ?? entry.id) === entry.id;
   const isLastEntry = (unit?.entryIds.at(-1) ?? entry.id) === entry.id;
-  const removed = operation?.kind === "remove-unit";
-  const before =
-    operation?.kind === "insert-note" &&
-    operation.position === "before" &&
-    isFirstEntry;
-  const after =
-    operation?.kind === "insert-note" &&
-    operation.position === "after" &&
-    isLastEntry;
-  const sourcePreview = reasoningEdits[0]
+  const removed = operations.some(
+    (operation) => operation.kind === "remove-unit",
+  );
+  const before = operations.some(
+    (operation) =>
+      operation.kind === "insert-note" &&
+      operation.position === "before" &&
+      isFirstEntry,
+  );
+  const after = operations.some(
+    (operation) =>
+      operation.kind === "insert-note" &&
+      operation.position === "after" &&
+      isLastEntry,
+  );
+  const sourceReasoning = reasoningBlocks(entry);
+  const stagedReasoning =
+    reasoningEdits.find(
+      (edit) => edit.blockIndex === sourceReasoning[0]?.blockIndex,
+    ) ?? reasoningEdits[0];
+  const previewBlock = stagedReasoning
     ? {
-        text: reasoningEdits[0].thinking,
+        text: stagedReasoning.thinking,
         safe: true,
-        removed: reasoningEdits[0].thinking.trim().length === 0,
+        removed: stagedReasoning.thinking.trim().length === 0,
       }
-    : reasoningBlocks(entry)[0];
-  const previewBlock = sourcePreview
-    ? {
-        text: sourcePreview.text,
-        safe: sourcePreview.safe,
-        reason: "reason" in sourcePreview ? sourcePreview.reason : undefined,
-        removed: "removed" in sourcePreview && sourcePreview.removed === true,
-      }
-    : undefined;
+    : sourceReasoning[0]
+      ? {
+          text: sourceReasoning[0].text,
+          safe: sourceReasoning[0].safe,
+          reason: sourceReasoning[0].reason,
+          removed: false,
+        }
+      : undefined;
   const reasoningPreview = previewBlock
     ? theme.fg(
         "thinkingText",
@@ -779,11 +805,14 @@ function displayAnnotations(
   const unsignedReasoning = reasoningEdits.some((edit) => edit.unsigned);
   const markers = [
     removed ? theme.fg("error", "[remove] ") : "",
-    unsignedText ? theme.fg("warning", "[edit unsigned] ") : "",
-    !unsignedText && edits.length > 0 ? theme.fg("warning", "[edit] ") : "",
+    unsignedText
+      ? theme.fg("warning", "[edit unsigned] ")
+      : edits.length > 0
+        ? theme.fg("warning", "[edit] ")
+        : "",
     unsignedReasoning
       ? theme.fg("warning", "[edit reasoning unsigned] ")
-      : !unsignedText && reasoningEdits.length > 0
+      : reasoningEdits.length > 0
         ? theme.fg("warning", "[edit reasoning] ")
         : "",
     before ? theme.fg("accent", "[insert before] ") : "",
@@ -916,24 +945,54 @@ function logicalUnitForEntry(entryId: string): LogicalUnitLike | undefined {
   );
 }
 
+function isBlockEdit(
+  operation: StagedOperation,
+): operation is Extract<
+  StagedOperation,
+  { kind: "edit-text" | "edit-reasoning" | "edit-unsigned" }
+> {
+  return (
+    operation.kind === "edit-text" ||
+    operation.kind === "edit-reasoning" ||
+    operation.kind === "edit-unsigned"
+  );
+}
+
+function blockOperationKey(operation: StagedOperation): string | undefined {
+  if (operation.kind === "edit-text") {
+    return `${operation.entryId}:${operation.blockIndex ?? 0}:text`;
+  }
+  if (operation.kind === "edit-reasoning") {
+    return `${operation.entryId}:${operation.blockIndex}:thinking`;
+  }
+  if (operation.kind === "edit-unsigned") {
+    return `${operation.entryId}:${operation.blockIndex}:${operation.blockType}`;
+  }
+  return undefined;
+}
+
 function operationTargetsUnit(
   operation: StagedOperation,
   unit: LogicalUnitLike | undefined,
   entryId: string,
 ): boolean {
   const entryIds = unit?.entryIds ?? [entryId];
-  if (
-    operation.kind === "edit-text" ||
-    operation.kind === "edit-reasoning" ||
-    operation.kind === "edit-unsigned"
-  ) {
-    return entryIds.includes(operation.entryId);
-  }
+  if (isBlockEdit(operation)) return entryIds.includes(operation.entryId);
   const targetId =
     operation.kind === "remove-unit"
       ? operation.unitId
       : operation.anchorUnitId;
   return targetId === (unit?.id ?? entryId) || entryIds.includes(targetId);
+}
+
+function operationTargetsEntry(
+  operation: StagedOperation,
+  unit: LogicalUnitLike | undefined,
+  entryId: string,
+): boolean {
+  return isBlockEdit(operation)
+    ? operation.entryId === entryId
+    : operationTargetsUnit(operation, unit, entryId);
 }
 
 function replaceOperationForUnit(
@@ -942,9 +1001,31 @@ function replaceOperationForUnit(
   entryId: string,
   operation: StagedOperation,
 ): void {
-  state.operations = state.operations.filter(
-    (candidate) => !operationTargetsUnit(candidate, unit, entryId),
-  );
+  const targetKey = blockOperationKey(operation);
+  state.operations = state.operations.filter((candidate) => {
+    if (targetKey !== undefined) {
+      if (
+        candidate.kind === "remove-unit" &&
+        operationTargetsUnit(candidate, unit, entryId)
+      ) {
+        return false;
+      }
+      if (
+        isBlockEdit(candidate) &&
+        blockOperationKey(candidate) === targetKey
+      ) {
+        return false;
+      }
+      if (
+        (candidate.kind === "insert" || candidate.kind === "insert-note") &&
+        operationTargetsUnit(candidate, unit, entryId)
+      ) {
+        return false;
+      }
+      return true;
+    }
+    return !operationTargetsUnit(candidate, unit, entryId);
+  });
   state.operations.push(operation);
 }
 
@@ -1225,6 +1306,20 @@ type EditChoice = {
   label: string;
 };
 
+function existingBlockOperation(
+  state: ReturnType<typeof selectorState>,
+  entryId: string,
+  choice: Pick<EditChoice, "kind" | "blockType" | "blockIndex">,
+): StagedOperation | undefined {
+  return state.operations.find((operation) => {
+    if (!isBlockEdit(operation) || operation.entryId !== entryId) return false;
+    return (
+      blockOperationKey(operation) ===
+      `${entryId}:${choice.blockIndex}:${choice.blockType}`
+    );
+  });
+}
+
 async function editEntry(
   selector: SelectorLike,
   state: ReturnType<typeof selectorState>,
@@ -1290,24 +1385,13 @@ async function editEntry(
       );
       return;
     }
-    const existing = state.operations.find((operation) =>
-      operationTargetsUnit(operation, unit, entry.id),
-    );
+    const existing = existingBlockOperation(state, entry.id, choice);
     const prefill =
-      choice.kind === "text" &&
-      existing?.kind === "edit-text" &&
-      existing.entryId === entry.id &&
-      (existing.blockIndex ?? 0) === choice.blockIndex
+      existing?.kind === "edit-text"
         ? existing.text
-        : choice.kind === "reasoning" &&
-            existing?.kind === "edit-reasoning" &&
-            existing.entryId === entry.id &&
-            existing.blockIndex === choice.blockIndex
+        : existing?.kind === "edit-reasoning"
           ? existing.thinking
-          : existing?.kind === "edit-unsigned" &&
-              existing.entryId === entry.id &&
-              existing.blockIndex === choice.blockIndex &&
-              existing.blockType === choice.blockType
+          : existing?.kind === "edit-unsigned"
             ? existing.text
             : choice.text;
     startInlineEdit(
@@ -1405,10 +1489,13 @@ function showSignedOverride(
       const ctx = getExtensionContext();
       if (!ctx?.hasUI) return;
       const blockType = choice.blockType;
+      const existing = existingBlockOperation(state, entry.id, choice);
+      const prefill =
+        existing?.kind === "edit-unsigned" ? existing.text : choice.text;
       startInlineEdit(
         selector,
         state,
-        choice.text,
+        prefill,
         (text) => {
           if (
             blockType === "thinking" &&

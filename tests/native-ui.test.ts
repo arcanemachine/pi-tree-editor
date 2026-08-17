@@ -752,7 +752,7 @@ describe("native tree editor interaction", () => {
     }
   });
 
-  it("keeps one latest staged edit per entry without mutating it", async () => {
+  it("keeps distinct staged block edits per entry without mutating it", async () => {
     await installNativeHooks();
     const treeSelectorUrl = new URL(
       "./modes/interactive/components/tree-selector.js",
@@ -795,16 +795,24 @@ describe("native tree editor interaction", () => {
     selector.handleInput("2");
     selector.handleInput("B");
     selector.handleInput("\r");
-    expect(selectorState(selector).operations).toHaveLength(1);
-    expect(selectorState(selector).operations[0]).toMatchObject({
-      kind: "edit-text",
-      blockIndex: 1,
-      text: "Bsecond block",
-    });
+    expect(selectorState(selector).operations).toHaveLength(2);
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 0,
+        text: "Afirst block",
+      },
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 1,
+        text: "Bsecond block",
+      },
+    ]);
     const rendered = selector.render(80).join("\n");
     expect(rendered).toContain("[edit]");
-    expect(rendered).not.toContain("Afirst block");
-    expect(rendered).toContain("first blockBsecond block");
+    expect(rendered).toContain("Afirst blockBsecond block");
     const entry = manager
       .getEntries()
       .find((candidate) => candidate.id === leafId) as
