@@ -33,14 +33,15 @@ Tested against Pi 0.84.1. Compatible future Pi versions must provide the require
 Open `/tree`, then press `Tab` to enter tree-editor mode. Native tree navigation, search, filtering, folding, labels, and copy behavior remain available.
 
 ```text
-ctrl+s save · e edit · d remove · a insert · Shift+A insert before · u unstage
+ctrl+s save · e edit · d remove · a insert · Shift+A insert before · u unstage · r reasoning
 ```
 
 - `a` / `Shift+A` first opens a selector-local role menu in this exact order: `User` (default), `Assistant`, `Context note`. Escape returns to the tree without staging. After choosing a role, enter the text in selector-local input.
 - User and assistant inserts become actual staged virtual tree rows immediately before or after the selected logical unit. Rows participate in native filtering, selection, vertical viewport, horizontal viewport, and geometry. `e` edits a selected staged row and `u` unstages it. Source-only actions on a staged row are refused clearly.
 - Assistant inserts are available only when the active model exposes its `api`, `provider`, and `id`; inserted assistant messages are plain synthetic messages with zero usage and a stopped completion, with no reasoning, signatures, tools, or stale metadata.
 - `e` edits a supported source text block inline. `d` stages or unstages removal of a logical unit. Tool calls and all corresponding results remain indivisible.
-- `u` unstages the selected source action or staged inserted row. Staged actions use latest-wins semantics per logical unit.
+- Reasoning traces are hidden by default in both native `/tree` and editor mode. While editor mode is active, `r` or `R` toggles display-only reasoning previews for the current visit; leaving and re-entering starts hidden again. Staged reasoning markers remain visible when previews are hidden. In normal native mode, `r` and `R` retain Pi's search/input behavior.
+- `u` unstages the selected source action or staged inserted row. Staged actions use latest-wins semantics per exact block target; unit removal and selected-row unstage remain unit-wide.
 - `ctrl+s` is the sole save shortcut in edit mode. It opens a save menu showing the staged item count; `Yes` applies (default), and `Cancel` keeps editing. Plain `s` remains native tree search behavior. Ctrl+Enter is not a save alias.
 - Escape cancels an active inline field or numbered chooser first. With no staged changes it exits `/tree`; with staged changes it opens `Save changes to N staged item(s)?` (defaulting to the first option):
   - `Yes. Return to conversation` applies the staged changes.

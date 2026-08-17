@@ -321,7 +321,10 @@ describe("role-based staged rows", () => {
     expect(display).toContain("[edit]");
     expect(display).toContain("[edit reasoning unsigned]");
     expect(display).toContain("re-edited answer");
-    expect(display).toContain("changed thought");
+    expect(display).not.toContain("changed thought");
+    selector.handleInput("r");
+    expect(selector.render(100).join("\n")).toContain("changed thought");
+    selector.handleInput("R");
     for (const width of [100, 48, 24, 12, 4]) {
       expect(
         selector

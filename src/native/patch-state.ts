@@ -3,6 +3,7 @@ import type { HookStatus } from "./compatibility.js";
 
 export type SelectorState = {
   editMode: boolean;
+  reasoningPreviewsVisible: boolean;
   operations: import("../surgery/types.js").SurgeryOperation[];
   snapshot?: {
     sessionId?: string;
@@ -41,6 +42,7 @@ export function selectorState(selector: object): SelectorState {
   if (!state) {
     state = {
       editMode: false,
+      reasoningPreviewsVisible: false,
       operations: [],
       busy: false,
       confirmingExit: false,

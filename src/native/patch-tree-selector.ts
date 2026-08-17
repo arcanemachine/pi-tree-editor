@@ -132,6 +132,7 @@ export function patchTreeSelector(
         return;
       }
       state.editMode = !state.editMode;
+      state.reasoningPreviewsVisible = false;
       ctx?.ui.notify(
         state.editMode
           ? "Tree editor mode: ctrl+s save, e edit, d remove, a insert, u unstage"
@@ -160,9 +161,20 @@ export function patchTreeSelector(
       return;
     }
     if (state.busy) return;
+    if (keyData === "r" || keyData === "R") {
+      state.reasoningPreviewsVisible = !state.reasoningPreviewsVisible;
+      getExtensionContext()?.ui.notify(
+        state.reasoningPreviewsVisible
+          ? "Reasoning previews shown"
+          : "Reasoning previews hidden",
+        "info",
+      );
+      return;
+    }
     if (keyData === "\u001b") {
       if (state.operations.length === 0) {
         state.editMode = false;
+        state.reasoningPreviewsVisible = false;
         state.snapshot = undefined;
         list?.onCancel?.();
       } else {
@@ -314,7 +326,11 @@ function patchTreeListDisplay(
           ? cloneDisplayNode(node, entry, display.edits, display.reasoningEdits)
           : node;
       const rendered = original.call(this, displayNode, isSelected);
-      return `${display.reasoningPreview}${display.marker}${rendered}`;
+      const reasoningPreview =
+        state.editMode && state.reasoningPreviewsVisible
+          ? display.reasoningPreview
+          : "";
+      return `${reasoningPreview}${display.marker}${rendered}`;
     } catch {
       return original.call(this, node, isSelected);
     }
@@ -889,7 +905,7 @@ function editorHelpLine(
         : state.flow === "exit-confirm"
           ? "Exit menu: Yes save · No keep editing · No abandon"
           : state.editMode
-            ? "Tree editor ON: ctrl+s save · e edit · d remove · a/Shift+A insert · u unstage"
+            ? "Tree editor ON: ctrl+s save · e edit · d remove · a/Shift+A insert · u unstage · r reasoning"
             : "Tree editor: Tab edit mode · Escape exit /tree";
   return truncateToWidth(`  ${line}`, Math.max(1, width));
 }
@@ -1743,6 +1759,7 @@ function showExitConfirmation(
         state.operations = [];
         state.snapshot = undefined;
         state.editMode = false;
+        state.reasoningPreviewsVisible = false;
         list?.onCancel?.();
         ctx.ui.notify("Staged changes discarded", "info");
       }
@@ -1936,6 +1953,7 @@ async function previewAndApply(
     state.operations = [];
     state.snapshot = undefined;
     state.editMode = false;
+    state.reasoningPreviewsVisible = false;
     list?.onCancel?.();
     const interactive = mode as Record<string, any> | undefined;
     interactive?.chatContainer?.clear?.();

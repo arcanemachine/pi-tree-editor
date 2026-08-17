@@ -1203,9 +1203,10 @@ describe("native tree editor interaction", () => {
       sessionManager: manager,
       ui: { terminal: { rows: 40 }, requestRender: () => undefined },
     } as never);
+    const notifications: string[] = [];
     setExtensionContext({
       hasUI: true,
-      ui: { notify: () => undefined },
+      ui: { notify: (message: string) => notifications.push(message) },
     } as never);
     const selector = new TreeSelectorComponent(
       manager.getTree(),
@@ -1214,11 +1215,27 @@ describe("native tree editor interaction", () => {
       () => undefined,
       () => undefined,
     );
+    const normalRender = selector.render(80);
     selector.handleInput("\t");
     const firstReasonRender = selector.render(80);
-    expect(firstReasonRender.join("\n")).toContain(
+    expect(firstReasonRender).toHaveLength(normalRender.length);
+    expect(firstReasonRender.join("\n")).not.toContain(
       "[reasoning: inspect the repository]",
     );
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(false);
+    expect(selector.render(160).join("\n")).toContain("r reasoning");
+    selector.handleInput("r");
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(true);
+    expect(selector.render(80).join("\n")).toContain(
+      "[reasoning: inspect the repository]",
+    );
+    expect(notifications.at(-1)).toBe("Reasoning previews shown");
+    selector.handleInput("R");
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(false);
+    expect(selector.render(80).join("\n")).not.toContain(
+      "[reasoning: inspect the repository]",
+    );
+    expect(notifications.at(-1)).toBe("Reasoning previews hidden");
     selector.handleInput("e");
     expect(selector.render(80).join("\n")).toContain(
       "Reasoning — inspect the repository",
@@ -1245,7 +1262,16 @@ describe("native tree editor interaction", () => {
     ]);
     const staged = selector.render(80).join("\n");
     expect(staged).toContain("[edit reasoning]");
-    expect(staged).toContain("[reasoning: new thought]");
+    expect(staged).not.toContain("[reasoning: new thought]");
+    selector.handleInput("r");
+    expect(selector.render(80).join("\n")).toContain(
+      "[reasoning: new thought]",
+    );
+    selector.handleInput("R");
+    expect(selector.render(80).join("\n")).toContain("[edit reasoning]");
+    expect(selector.render(80).join("\n")).not.toContain(
+      "[reasoning: new thought]",
+    );
     expect(manager.getEntries()).toEqual(original);
 
     selector.handleInput("e");
@@ -1264,7 +1290,12 @@ describe("native tree editor interaction", () => {
       kind: "edit-reasoning",
       thinking: "",
     });
+    expect(selector.render(80).join("\n")).not.toContain(
+      "[reasoning: removed]",
+    );
+    selector.handleInput("r");
     expect(selector.render(80).join("\n")).toContain("[reasoning: removed]");
+    selector.handleInput("R");
     selector.handleInput("d");
     expect(selectorState(selector).operations).toEqual([
       { kind: "remove-unit", unitId: leafId },
@@ -1280,6 +1311,12 @@ describe("native tree editor interaction", () => {
     expect(
       selector.render(24).every((line: string) => visibleWidth(line) <= 24),
     ).toBe(true);
+    selector.handleInput("u");
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).editMode).toBe(false);
+    selector.handleInput("\t");
+    expect(selectorState(selector).editMode).toBe(true);
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(false);
   });
 
   it("shows unsafe reasoning as read-only with a concise reason", async () => {
@@ -1330,9 +1367,10 @@ describe("native tree editor interaction", () => {
       () => undefined,
     );
     selector.handleInput("\t");
-    expect(selector.render(80).join("\n")).toContain(
+    expect(selector.render(80).join("\n")).not.toContain(
       "[reasoning: signed thought]",
     );
+    expect(selector.render(160).join("\n")).toContain("r reasoning");
     selector.handleInput("e");
     expect(selector.render(80).join("\n")).toContain(
       "Reasoning — signed thought (provider-signed)",

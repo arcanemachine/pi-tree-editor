@@ -7,6 +7,7 @@ import {
 import {
   clearSessionState,
   getHookStatus,
+  selectorState,
   setExtensionContext,
   setHookStatus,
 } from "../src/native/patch-state.js";
@@ -88,6 +89,22 @@ describe("native compatibility", () => {
     const status = getHookStatus();
     expect(status.enabled).toBe(installed);
     if (!installed) expect(status.reason).toBeTruthy();
+  });
+
+  it("delegates normal-mode reasoning keys to native selector input", async () => {
+    const modules = fakeModules();
+    const installed = await installNativeHooksWithModulesForTest(
+      modules.selectorModule,
+      modules.interactiveModule,
+      { theme: { fg: (_color: string, text: string) => text } },
+    );
+    expect(installed).toBe(true);
+    const selector = new (modules.selectorModule
+      .TreeSelectorComponent as any)();
+    selector.handleInput("r");
+    selector.handleInput("R");
+    expect(modules.selectorCalls).toEqual(["r", "R"]);
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(false);
   });
 
   it("keeps core hooks when the optional theme module is unavailable", async () => {
