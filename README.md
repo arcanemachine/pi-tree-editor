@@ -10,6 +10,8 @@
 
 Stage changes, review them, and apply them to a new conversation branch. The original branch stays available and unchanged.
 
+> Like this extension? See [my other Pi extensions](https://github.com/arcanemachine/pi-projects).
+
 ## Why?
 
 Conversation context sometimes needs correction. You may want to:

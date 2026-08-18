@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Document the parent Pi extensions project.
+
 ## 0.1.1
 
 - Reorganize and simplify the README around product purpose, installation, usage, editing boundaries, and safety.
