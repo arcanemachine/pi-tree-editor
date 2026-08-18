@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Reorganize and simplify the README around product purpose, installation, usage, editing boundaries, and safety.
+- Make npm the primary installation path now that the package is published.
+- Confirm Pi package and gallery metadata for npm distribution.
+
 ## 0.1.0
 
 - Add safe copy-on-write conversation editing through Pi's native tree selector.
