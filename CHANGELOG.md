@@ -10,3 +10,4 @@
 - Add role-specific staged user, assistant, and context rows with append-only replay and native viewport geometry.
 - Allow safe per-block assistant text edits beside signed blocks and provide an explicit unsigned-copy path for directly signed text or reasoning, with provider-continuity warnings.
 - Order reasoning choices before answer choices and add selector-local partial assistant block removal with signed-removal confirmations.
+- Make nested edit, delete, and insert menus return one level on Escape or No while top-level chooser cancellation still returns to the tree.

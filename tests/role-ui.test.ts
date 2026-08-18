@@ -160,14 +160,17 @@ describe("role-based staged rows", () => {
     expect(menu).toContain(
       "This block is provider-signed and cannot be edited safely. Edit it anyways?",
     );
-    expect(menu).toContain("→ No. Return to tree");
+    expect(menu).toContain("→ No. Return to previous menu");
     expect(menu).toContain("  Yes. Create an unsigned editable copy");
     selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("block-choice");
+    expect(selector.render(100).join("\n")).toContain(
+      "Choose a text block to edit",
+    );
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBeUndefined();
     expect(selectorState(selector).operations).toHaveLength(0);
 
-    selector.handleInput("e");
-    selector.handleInput("\r");
-    expect(selectorState(selector).operations).toHaveLength(0);
     selector.handleInput("e");
     selector.handleInput("\u001b[B");
     selector.handleInput("\r");
@@ -394,6 +397,151 @@ describe("role-based staged rows", () => {
     expect(selector.render(100).join("\n")).toContain(
       "[edit reasoning unsigned]",
     );
+  });
+
+  it("backs nested edit menus without mutating staged state", async () => {
+    const { selector, leafId } = await selectorFor(true, {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "thought" },
+        { type: "text", text: "answer" },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+    });
+    selector.handleInput("\t");
+    selector.handleInput("r");
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(true);
+    selector.handleInput("e");
+    selector.handleInput("2");
+    setInlineText(selector, "changed answer");
+    selector.handleInput("\r");
+    const state = selectorState(selector);
+    expect(state.operations).toEqual([
+      {
+        kind: "edit-text",
+        entryId: leafId,
+        blockIndex: 1,
+        text: "changed answer",
+      },
+    ]);
+    expect(state.snapshot).toBeDefined();
+
+    selector.handleInput("e");
+    selector.handleInput("2");
+    const prefill = selectorState(selector).inlineInput?.input as unknown as {
+      getValue?: () => string;
+    };
+    expect(prefill.getValue?.()).toBe("changed answer");
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("block-choice");
+    expect(selectorState(selector).flowComponent).toBeDefined();
+    expect(selectorState(selector).inlineInput).toBeUndefined();
+    expect(selectorState(selector).operations).toHaveLength(1);
+    expect(selectorState(selector).snapshot).toBeDefined();
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(true);
+    for (const width of [80, 24, 8]) {
+      expect(
+        selector
+          .render(width)
+          .every((line: string) => visibleWidth(line) <= width),
+      ).toBe(true);
+    }
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBeUndefined();
+    expect(selectorState(selector).flowComponent).toBeUndefined();
+    expect(selectorState(selector).inlineInput).toBeUndefined();
+    expect(selectorState(selector).editMode).toBe(true);
+    expect(selectorState(selector).operations).toHaveLength(1);
+    expect(selectorState(selector).reasoningPreviewsVisible).toBe(true);
+    selector.handleInput("e");
+    selector.handleInput("2");
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("block-choice");
+    selector.handleInput("\u001b");
+    selector.handleInput("u");
+    expect(selectorState(selector).operations).toHaveLength(0);
+  });
+
+  it("returns a directly opened safe editor to the tree", async () => {
+    const { selector } = await selectorFor();
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).inlineInput).toBeUndefined();
+    expect(selectorState(selector).flow).toBeUndefined();
+    expect(selectorState(selector).editMode).toBe(true);
+  });
+
+  it("backs signed edit confirmation and editor to the edit chooser", async () => {
+    const { selector } = await selectorFor(true, {
+      role: "assistant",
+      content: [{ type: "text", text: "signed", textSignature: "sig" }],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+    });
+    selector.handleInput("\t");
+    selector.handleInput("e");
+    expect(selectorState(selector).flow).toBe("signed-override");
+    expect(selector.render(80).join("\n")).toContain(
+      "→ No. Return to previous menu",
+    );
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("block-choice");
+    expect(selector.render(80).join("\n")).toContain(
+      "Choose a text block to edit",
+    );
+    selector.handleInput("1");
+    expect(selectorState(selector).flow).toBe("signed-override");
+    selector.handleInput("\r");
+    expect(selectorState(selector).flow).toBe("block-choice");
+    selector.handleInput("1");
+    selector.handleInput("\u001b[B");
+    selector.handleInput("\r");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("block-choice");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBeUndefined();
+  });
+
+  it("backs an insert editor to its selected role and preserves its anchor", async () => {
+    const { selector, leafId } = await selectorFor();
+    selector.handleInput("\t");
+    selector.handleInput("A");
+    selector.handleInput("\u001b[B");
+    expect(selector.render(80).join("\n")).toContain("→ Assistant");
+    selector.handleInput("\r");
+    expect(selectorState(selector).inlineInput).toBeDefined();
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("role-choice");
+    expect(selector.render(80).join("\n")).toContain("→ Assistant");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    selector.handleInput("\r");
+    setInlineText(selector, "before assistant");
+    selector.handleInput("\r");
+    expect(selectorState(selector).flow).toBeUndefined();
+    expect(selectorState(selector).inlineInput).toBeUndefined();
+    expect(selectorState(selector).operations).toEqual([
+      {
+        kind: "insert",
+        anchorUnitId: leafId,
+        position: "before",
+        role: "assistant",
+        text: "before assistant",
+        assistant: { api: "openai", provider: "openai", model: "test" },
+      },
+    ]);
+    selector.handleInput("u");
+    expect(selectorState(selector).operations).toHaveLength(0);
+    selector.handleInput("A");
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBeUndefined();
+    expect(selectorState(selector).editMode).toBe(true);
   });
 
   it("cancels role and numbered block choosers with Escape", async () => {

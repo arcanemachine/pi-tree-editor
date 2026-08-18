@@ -1196,6 +1196,7 @@ async function beginInsertRole(
   anchorEntryId: string,
   position: "before" | "after",
   list: TreeListLike | undefined,
+  selectedRole?: "user" | "assistant" | "context",
 ): Promise<void> {
   const ctx = getExtensionContext();
   if (!ctx?.hasUI) return;
@@ -1222,7 +1223,7 @@ async function beginInsertRole(
     "role-choice",
     "Choose inserted row role",
     items,
-    0,
+    selectedRole ? items.findIndex((item) => item.value === selectedRole) : 0,
     (value) => {
       const role = value as "user" | "assistant" | "context";
       const assistant =
@@ -1242,6 +1243,18 @@ async function beginInsertRole(
         role,
         assistant,
         list,
+        false,
+        "",
+        () => {
+          void beginInsertRole(
+            selector,
+            state,
+            anchorEntryId,
+            position,
+            list,
+            role,
+          );
+        },
       );
     },
     () => undefined,
@@ -1270,6 +1283,16 @@ async function beginInsertRole(
           list,
           true,
           data,
+          () => {
+            void beginInsertRole(
+              selector,
+              state,
+              anchorEntryId,
+              position,
+              list,
+              "context",
+            );
+          },
         );
         return;
       }
@@ -1346,6 +1369,7 @@ function startInsertInput(
   list: TreeListLike | undefined,
   legacy = false,
   initialText = "",
+  onBack?: () => void,
 ): void {
   const ctx = getExtensionContext();
   if (!ctx?.hasUI) return;
@@ -1389,6 +1413,7 @@ function startInsertInput(
     },
     list,
     !legacy && canUseMultilineEditor(),
+    onBack,
   );
 }
 
@@ -1637,7 +1662,7 @@ function showSignedRemoval(
     "signed-removal",
     "This block is provider-signed and cannot be removed safely. Remove it anyways?",
     [
-      { value: "no", label: "No. Return to tree" },
+      { value: "no", label: "No. Return to previous menu" },
       {
         value: "yes",
         label: "Yes. Create an unsigned copy without this block",
@@ -1647,9 +1672,12 @@ function showSignedRemoval(
     (value) => {
       if (value === "yes") {
         stageBlockRemoval(state, entry, choice, true, true);
+      } else {
+        beginPartialRemoval(selector, state, entry, list);
       }
     },
     () => undefined,
+    () => beginPartialRemoval(selector, state, entry, list),
   );
   if (!shown) return;
 }
@@ -1659,6 +1687,7 @@ async function editEntry(
   state: ReturnType<typeof selectorState>,
   entry: SessionEntryLike,
   list: TreeListLike | undefined,
+  forceChooser = false,
 ): Promise<void> {
   const ctx = getExtensionContext();
   if (!ctx?.hasUI) return;
@@ -1706,10 +1735,13 @@ async function editEntry(
     );
     return;
   }
-  const startChoice = (choice: EditChoice) => {
+  const restoreChooser = () => {
+    void editEntry(selector, state, entry, list, true);
+  };
+  const startChoice = (choice: EditChoice, onBack?: () => void) => {
     const unit = logicalUnitForEntry(entry.id);
     if (choice.signedTarget) {
-      showSignedOverride(selector, state, entry, unit, choice, list);
+      showSignedOverride(selector, state, entry, unit, choice, list, onBack);
       return;
     }
     if (!choice.safe) {
@@ -1770,10 +1802,15 @@ async function editEntry(
       },
       list,
       choice.kind === "reasoning",
+      onBack,
     );
   };
-  if (choices.length === 1 && (choices[0]!.safe || choices[0]!.signedTarget)) {
+  if (!forceChooser && choices.length === 1 && choices[0]!.safe) {
     startChoice(choices[0]!);
+    return;
+  }
+  if (!forceChooser && choices.length === 1 && choices[0]!.signedTarget) {
+    startChoice(choices[0]!, restoreChooser);
     return;
   }
   state.flow = "block-choice";
@@ -1792,7 +1829,7 @@ async function editEntry(
         : undefined;
       if (!choice) return;
       state.flowComponent?.finish();
-      startChoice(choice);
+      startChoice(choice, restoreChooser);
     },
     () => undefined,
     () => undefined,
@@ -1806,6 +1843,7 @@ function showSignedOverride(
   unit: LogicalUnitLike | undefined,
   choice: EditChoice,
   list: TreeListLike | undefined,
+  onBack?: () => void,
 ): void {
   const shown = showChoiceMenu(
     selector,
@@ -1814,12 +1852,15 @@ function showSignedOverride(
     "signed-override",
     "This block is provider-signed and cannot be edited safely. Edit it anyways?",
     [
-      { value: "no", label: "No. Return to tree" },
+      { value: "no", label: "No. Return to previous menu" },
       { value: "yes", label: "Yes. Create an unsigned editable copy" },
     ],
     0,
     (value) => {
-      if (value !== "yes") return;
+      if (value !== "yes") {
+        onBack?.();
+        return;
+      }
       const ctx = getExtensionContext();
       if (!ctx?.hasUI) return;
       const blockType = choice.blockType;
@@ -1858,9 +1899,11 @@ function showSignedOverride(
         },
         list,
         blockType === "thinking",
+        onBack,
       );
     },
     () => undefined,
+    onBack,
   );
   if (!shown) return;
 }
@@ -1964,6 +2007,7 @@ function showChoiceMenu(
   defaultIndex: number,
   onSelect: (value: string) => void,
   onCancel: () => void,
+  onBack?: () => void,
 ): boolean {
   const labelInputContainer = selector.labelInputContainer as
     | { clear(): void; addChild(child: unknown): void }
@@ -2021,7 +2065,7 @@ function showChoiceMenu(
   };
   const cancel = () => {
     finish();
-    onCancel();
+    (onBack ?? onCancel)();
   };
   select.onSelect = (item) => {
     finish();
@@ -2178,6 +2222,7 @@ function startInlineEdit(
   onSubmit: (text: string) => boolean,
   list: TreeListLike | undefined,
   forceMultiline = false,
+  onBack?: () => void,
 ): void {
   const labelInputContainer = selector.labelInputContainer as
     | { clear(): void; addChild(child: unknown): void }
@@ -2216,6 +2261,10 @@ function startInlineEdit(
     if (list) treeContainer.addChild(list);
     getExtensionContext()?.ui.notify("Inline tree input closed", "info");
   };
+  const cancel = () => {
+    finish();
+    onBack?.();
+  };
   const submittedValue = (value: string): string =>
     isMultilineEditor && value === initialEditorText ? prefill : value;
   const submit = (value: string) => {
@@ -2228,8 +2277,8 @@ function startInlineEdit(
     submit(value);
   };
   input.onSubmit = submit;
-  if (input instanceof Input) input.onEscape = finish;
-  state.inlineInput = { input, finish, cancel: finish, submit: submitInline };
+  if (input instanceof Input) input.onEscape = cancel;
+  state.inlineInput = { input, finish, cancel, submit: submitInline };
   treeContainer.clear();
   labelInputContainer.clear();
   labelInputContainer.addChild(input);

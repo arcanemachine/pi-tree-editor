@@ -44,7 +44,7 @@ ctrl+s save · e edit · d remove · a insert · Shift+A insert before · u unst
 - Reasoning traces are hidden by default in both native `/tree` and editor mode. While editor mode is active, `r` or `R` toggles display-only reasoning previews for the current visit; leaving and re-entering starts hidden again. Staged reasoning markers remain visible when previews are hidden. In normal native mode, `r` and `R` retain Pi's search/input behavior.
 - `u` unstages the selected source action or staged inserted row. Staged actions use latest-wins semantics per exact block target; unit removal and selected-row unstage remain unit-wide.
 - `ctrl+s` is the sole save shortcut in edit mode. It opens a save menu showing the staged item count; `Yes` applies (default), and `Cancel` keeps editing. Plain `s` remains native tree search behavior. Ctrl+Enter is not a save alias.
-- Escape cancels an active inline field or numbered chooser first. With no staged changes it exits `/tree`; with staged changes it opens `Save changes to N staged item(s)?` (defaulting to the first option):
+- Escape cancels an active inline field or numbered chooser first. Nested confirmations and editors return to their parent selector-local menu one level at a time; top-level chooser Escape returns to the tree. With no staged changes it exits `/tree`; with staged changes it opens `Save changes to N staged item(s)?` (defaulting to the first option):
   - `Yes. Return to conversation` applies the staged changes.
   - `No. Return to tree and continue making changes` keeps editing with staged changes.
   - `No. Return to conversation and abandon staged changes` discards staged changes and exits.
@@ -59,7 +59,7 @@ Reasoning editing remains stricter: the target must be an unsigned, recognized, 
 
 ```text
 This block is provider-signed and cannot be edited safely. Edit it anyways?
-→ No. Return to tree
+→ No. Return to previous menu
   Yes. Create an unsigned editable copy
 ```
 

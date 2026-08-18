@@ -1465,12 +1465,22 @@ describe("native tree editor interaction", () => {
     expect(signedSelector.render(100).join("\n")).toContain(
       "This block is provider-signed and cannot be removed safely. Remove it anyways?",
     );
+    expect(signedSelector.render(100).join("\n")).toContain(
+      "→ No. Return to previous menu",
+    );
     signedSelector.handleInput("\u001b");
-    expect(selectorState(signedSelector).operations).toHaveLength(0);
+    expect(selectorState(signedSelector).flow).toBe("block-choice");
+    expect(signedSelector.render(100).join("\n")).toContain("Delete:");
+    signedSelector.handleInput("1");
+    signedSelector.handleInput("\r");
+    expect(selectorState(signedSelector).flow).toBe("block-choice");
+    signedSelector.handleInput("\u001b");
+    expect(selectorState(signedSelector).flow).toBeUndefined();
     signedSelector.handleInput("d");
     signedSelector.handleInput("1");
     signedSelector.handleInput("\u001b[B");
     signedSelector.handleInput("\r");
+    expect(selectorState(signedSelector).flow).toBeUndefined();
     expect(selectorState(signedSelector).operations).toEqual([
       {
         kind: "remove-block",
@@ -1543,6 +1553,11 @@ describe("native tree editor interaction", () => {
     expect(selectorState(selector).flow).toBe("signed-override");
     expect(selector.render(80).join("\n")).toContain(
       "This block is provider-signed and cannot be edited safely. Edit it anyways?",
+    );
+    selector.handleInput("\u001b");
+    expect(selectorState(selector).flow).toBe("block-choice");
+    expect(selector.render(80).join("\n")).toContain(
+      "Choose a text block to edit",
     );
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBeUndefined();
