@@ -971,7 +971,7 @@ function editorHelpLine(
     : state.flow === "role-choice"
       ? "Insert role: User · Assistant · Context note · Escape cancel"
       : state.flow === "save-review"
-        ? "Tree editor save: ctrl+s · Yes apply · Cancel keep staged"
+        ? "Tree editor save: ctrl+s · Yes apply and reopen tree · Cancel keep staged"
         : state.flow === "exit-confirm"
           ? "Exit menu: Yes save · No keep editing · No abandon"
           : state.editMode
@@ -1989,6 +1989,8 @@ type ChoiceFlow =
   | "signed-override"
   | "signed-removal";
 
+type SaveDestination = "tree" | "conversation";
+
 const choiceTheme = {
   selectedPrefix: (text: string) => text,
   selectedText: (text: string) => text,
@@ -2115,7 +2117,7 @@ function showExitConfirmation(
     0,
     (value) => {
       if (value === "apply") {
-        void previewAndApply(selector, state, list, true);
+        void previewAndApply(selector, state, list, "conversation");
       } else if (value === "keep") {
         keepEditing();
       } else if (value === "discard") {
@@ -2160,13 +2162,13 @@ function showSaveReview(
     "save-review",
     `Save ${state.operations.length} staged item${state.operations.length === 1 ? "" : "s"}?`,
     [
-      { value: "yes", label: "Yes" },
+      { value: "yes", label: "Yes. Apply and return to tree" },
       { value: "cancel", label: "Cancel" },
     ],
     0,
     (value) => {
       if (value === "yes") {
-        void previewAndApply(selector, state, list, true);
+        void previewAndApply(selector, state, list, "tree");
       }
     },
     () => {
@@ -2288,7 +2290,7 @@ async function previewAndApply(
   selector: SelectorLike,
   state: ReturnType<typeof selectorState>,
   list: TreeListLike | undefined,
-  approved = false,
+  destination: SaveDestination,
 ): Promise<void> {
   const ctx = getExtensionContext();
   const mode = getActiveMode();
@@ -2309,7 +2311,6 @@ async function previewAndApply(
       sessionId: state.snapshot.sessionId,
       operations: state.operations,
     });
-    if (!approved) return;
     const session = mode?.session as
       | { navigateTree?: (id: string, options?: unknown) => Promise<unknown> }
       | undefined;
@@ -2322,13 +2323,56 @@ async function previewAndApply(
     state.snapshot = undefined;
     state.editMode = false;
     state.reasoningPreviewsVisible = false;
-    list?.onCancel?.();
     const interactive = mode as Record<string, any> | undefined;
-    interactive?.chatContainer?.clear?.();
-    interactive?.renderInitialMessages?.();
-    interactive?.showStatus?.("Applied copy-on-write tree edits");
-    interactive?.ui?.requestRender?.();
-    ctx.ui.notify(`Tree edits applied (${result.auditEntryId})`, "info");
+    const uiWarnings: string[] = [];
+    try {
+      list?.onCancel?.();
+    } catch (error) {
+      uiWarnings.push(
+        `the old tree view could not be closed (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+    if (destination === "tree") {
+      const showTreeSelector = interactive?.showTreeSelector;
+      if (typeof showTreeSelector === "function") {
+        try {
+          showTreeSelector.call(interactive);
+        } catch (error) {
+          uiWarnings.push(
+            `/tree could not be reopened (${error instanceof Error ? error.message : String(error)})`,
+          );
+        }
+      } else {
+        uiWarnings.push("/tree could not be reopened; reopen it manually");
+      }
+      try {
+        interactive?.showStatus?.("Applied copy-on-write tree edits");
+        interactive?.ui?.requestRender?.();
+      } catch (error) {
+        uiWarnings.push(
+          `the refreshed tree could not be rendered (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+    } else {
+      try {
+        interactive?.chatContainer?.clear?.();
+        interactive?.renderInitialMessages?.();
+        interactive?.showStatus?.("Applied copy-on-write tree edits");
+        interactive?.ui?.requestRender?.();
+      } catch (error) {
+        uiWarnings.push(
+          `the conversation view could not be refreshed (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+    }
+    if (uiWarnings.length > 0) {
+      ctx.ui.notify(
+        `Tree edits applied (${result.auditEntryId}), but ${uiWarnings.join("; ")}`,
+        "warning",
+      );
+    } else {
+      ctx.ui.notify(`Tree edits applied (${result.auditEntryId})`, "info");
+    }
   } catch (error) {
     ctx.ui.notify(
       error instanceof Error ? error.message : String(error),

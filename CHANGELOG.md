@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Return to a refreshed `/tree` view after saving with `Ctrl+S`, while saves from the exit confirmation return to the conversation.
+
 ## 0.1.2
 
 - Document the parent Pi extensions project.

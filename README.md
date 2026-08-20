@@ -67,7 +67,7 @@ pi -e /path/to/pi-tree-editor/src/index.ts
 | `Shift+A` | Insert before the selected item                     |
 | `u`       | Unstage changes for the selected item               |
 | `r`       | Show or hide reasoning previews in editor mode      |
-| `Ctrl+S`  | Review and save staged changes                      |
+| `Ctrl+S`  | Review and save staged changes, then reopen `/tree` |
 | `Escape`  | Go back one level or leave the current flow         |
 
 Uppercase aliases also work for `e`, `d`, `u`, and `r`; `Shift+A` is its own action. Plain `s` remains native tree search input; `Ctrl+S` is the only save shortcut.
@@ -96,7 +96,7 @@ Synthetic assistant messages use the active model identity and contain plain ans
 
 Changes remain in memory until you save. Re-editing the same block replaces its earlier staged value, while compatible changes to different blocks can coexist. Whole-unit removal supersedes changes inside that unit.
 
-Press `Ctrl+S` to open the save menu. `Yes` is the default; `Cancel` returns to the tree with the staged changes intact.
+Press `Ctrl+S` to open the save menu. `Yes` is the default; after saving, the extension reopens a fresh `/tree` view on the new branch. `Cancel` returns to the tree with the staged changes intact. Saving from the exit confirmation returns to the conversation instead.
 
 Escape from a nested editor or confirmation returns to the previous menu. Escape from a top-level chooser returns to the tree. Leaving `/tree` with staged changes offers three choices: save and return to the conversation, keep editing, or abandon the staged changes.
 

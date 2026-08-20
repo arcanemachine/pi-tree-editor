@@ -80,7 +80,7 @@ describe("native tree editor interaction", () => {
     selector.handleInput("\x13");
     expect(selectorState(selector).flow).toBe("save-review");
     expect(selector.render(100).join("\n")).toContain(
-      "Tree editor save: ctrl+s · Yes apply · Cancel keep staged",
+      "Tree editor save: ctrl+s · Yes apply and reopen tree · Cancel keep staged",
     );
     expect(selector.render(100).join("\n")).toContain("Save 1 staged item?");
     selector.handleInput("\u001b");
@@ -199,10 +199,11 @@ describe("native tree editor interaction", () => {
       sessionManager: manager,
       ui: { terminal: { rows: 40 }, requestRender: () => undefined },
     } as never);
+    const menuNotifications: string[] = [];
     setExtensionContext({
       hasUI: true,
       isIdle: () => true,
-      ui: { notify: () => undefined },
+      ui: { notify: (message: string) => menuNotifications.push(message) },
     } as never);
     let exited = false;
     const selector = new TreeSelectorComponent(
@@ -236,6 +237,7 @@ describe("native tree editor interaction", () => {
     expect(selectorState(selector).operations).toHaveLength(0);
     expect(selectorState(selector).editMode).toBe(false);
     expect(exited).toBe(true);
+    expect(menuNotifications.at(-1)).toContain("/tree could not be reopened");
 
     const exitManager = SessionManager.inMemory(
       "/tmp/pi-tree-editor-menu-exit-test",
@@ -245,8 +247,12 @@ describe("native tree editor interaction", () => {
       content: "hello",
       timestamp: 1,
     });
+    let exitTreeReopened = 0;
     setActiveMode({
       sessionManager: exitManager,
+      showTreeSelector: () => {
+        exitTreeReopened += 1;
+      },
       ui: { terminal: { rows: 40 }, requestRender: () => undefined },
     } as never);
     let exitDiscarded = false;
@@ -272,6 +278,7 @@ describe("native tree editor interaction", () => {
     expect(selectorState(exitSelector).operations).toHaveLength(0);
     expect(selectorState(exitSelector).editMode).toBe(false);
     expect(exitDiscarded).toBe(true);
+    expect(exitTreeReopened).toBe(0);
 
     const applyManager = SessionManager.inMemory(
       "/tmp/pi-tree-editor-menu-exit-apply-test",
@@ -281,8 +288,12 @@ describe("native tree editor interaction", () => {
       content: "hello",
       timestamp: 1,
     });
+    let applyTreeReopened = 0;
     setActiveMode({
       sessionManager: applyManager,
+      showTreeSelector: () => {
+        applyTreeReopened += 1;
+      },
       ui: { terminal: { rows: 40 }, requestRender: () => undefined },
     } as never);
     let exitApplied = false;
@@ -307,6 +318,79 @@ describe("native tree editor interaction", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(selectorState(applySelector).operations).toHaveLength(0);
     expect(exitApplied).toBe(true);
+    expect(applyTreeReopened).toBe(0);
+  });
+
+  it("reopens a fresh tree after Ctrl+S saves", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-save-tree-test",
+    );
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    let reopened = 0;
+    let reopenedLeaf: string | null = null;
+    let reopenedEntryCount = 0;
+    let exited = 0;
+    setActiveMode({
+      sessionManager: manager,
+      showTreeSelector: () => {
+        reopened += 1;
+        reopenedLeaf = manager.getLeafId();
+        reopenedEntryCount = manager.getEntries().length;
+      },
+      chatContainer: { clear: () => undefined },
+      renderInitialMessages: () => undefined,
+      showStatus: () => undefined,
+      ui: { requestRender: () => undefined },
+    } as never);
+    setExtensionContext({
+      hasUI: true,
+      isIdle: () => true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => {
+        exited += 1;
+      },
+    );
+    selector.handleInput("\t");
+    selector.handleInput("a");
+    selector.handleInput("\r");
+    selector.handleInput("x");
+    selector.handleInput("\r");
+    selector.handleInput("\u0013");
+    expect(selectorState(selector).flow).toBe("save-review");
+    selector.handleInput("\r");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(selectorState(selector).operations).toHaveLength(0);
+    expect(selectorState(selector).editMode).toBe(false);
+    expect(exited).toBe(1);
+    expect(reopened).toBe(1);
+    expect(reopenedLeaf).not.toBe(leafId);
+    expect(reopenedEntryCount).toBe(manager.getEntries().length);
+    expect(
+      manager
+        .getEntries()
+        .some(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === "pi-tree-editor.surgery",
+        ),
+    ).toBe(true);
   });
 
   it("keeps staged operations when save planning fails", async () => {
