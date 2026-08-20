@@ -36,6 +36,9 @@ const SELECTOR_RENDER_PATCHED = Symbol.for(
 const HELP_RENDER_PATCHED = Symbol.for(
   "arcanemachine.pi-tree-editor.help-render-patched",
 );
+const SEARCH_RENDER_PATCHED = Symbol.for(
+  "arcanemachine.pi-tree-editor.search-render-patched",
+);
 
 type SelectorLike = {
   getTreeList?: () => Record<string | symbol, unknown>;
@@ -45,6 +48,7 @@ type SelectorLike = {
 type TreeListLike = {
   getSelectedNode?: () => { entry: SessionEntryLike } | undefined;
   getEntryDisplayText?: (node: unknown, isSelected: boolean) => string;
+  getSearchQuery?: () => string;
   render?: (width: number) => string[];
   applyFilter?: () => void;
   onSelect?: (entryId: string) => void;
@@ -122,6 +126,10 @@ export function patchTreeSelector(
       } else {
         state.inlineInput.input.handleInput(keyData);
       }
+      return;
+    }
+    if (this.labelInput) {
+      originalHandleInput.call(this, keyData);
       return;
     }
     if (keyData === "\t") {
@@ -242,7 +250,7 @@ export function patchTreeSelector(
       void editEntry(this, state, selected.entry, list);
       return;
     }
-    if (isCtrlS(keyData) || (keyData === "s" && hasLegacyInsert(state))) {
+    if (isCtrlS(keyData)) {
       if (state.operations.length === 0) {
         getExtensionContext()?.ui.notify(
           "No staged tree edits to save",
@@ -262,7 +270,13 @@ export function patchTreeSelector(
       );
       return;
     }
-    // Keep navigation, filtering, folding, copying, label editing, and plain s native.
+    if (isNativeTreeAction(keyData)) {
+      originalHandleInput.call(this, keyData);
+      return;
+    }
+    if (isTreeSearchBackspace(keyData) || isPrintableTreeSearchInput(keyData)) {
+      return;
+    }
     originalHandleInput.call(this, keyData);
   };
   prototype[PATCHED] = true;
@@ -283,6 +297,7 @@ function patchSelectorRender(
   prototype.render = function (this: SelectorLike, width: number): string[] {
     if (!getHookStatus().enabled) return originalRender.call(this, width);
     patchSelectorHelp(this);
+    patchSelectorSearch(this, theme);
     const state = selectorState(this);
     const list = this.getTreeList?.() as TreeListLike | undefined;
     if (list) refreshVirtualRows(list, state, theme);
@@ -616,10 +631,6 @@ function editVirtualRow(
   );
 }
 
-function hasLegacyInsert(state: ReturnType<typeof selectorState>): boolean {
-  return state.operations.some((operation) => operation.kind === "insert-note");
-}
-
 function isCtrlS(keyData: string): boolean {
   return matchesKey(keyData, "ctrl+s") || keyData === "\\x13";
 }
@@ -934,6 +945,46 @@ function isPlainInlineSubmit(keyData: string): boolean {
   );
 }
 
+const NATIVE_TREE_ACTIONS = [
+  "tui.select.up",
+  "tui.select.down",
+  "tui.select.pageUp",
+  "tui.select.pageDown",
+  "tui.editor.cursorLeft",
+  "tui.editor.cursorRight",
+  "app.tree.foldOrUp",
+  "app.tree.unfoldOrDown",
+  "app.message.copy",
+  "app.tree.filter.default",
+  "app.tree.filter.noTools",
+  "app.tree.filter.userOnly",
+  "app.tree.filter.labeledOnly",
+  "app.tree.filter.all",
+  "app.tree.filter.cycleForward",
+  "app.tree.filter.cycleBackward",
+  "app.tree.editLabel",
+  "app.tree.toggleLabelTimestamp",
+] as const;
+
+function isNativeTreeAction(keyData: string): boolean {
+  const keybindings = getKeybindings();
+  return NATIVE_TREE_ACTIONS.some((action) =>
+    keybindings.matches(keyData, action),
+  );
+}
+
+function isTreeSearchBackspace(keyData: string): boolean {
+  return getKeybindings().matches(keyData, "tui.editor.deleteCharBackward");
+}
+
+function isPrintableTreeSearchInput(keyData: string): boolean {
+  if (keyData.length === 0) return false;
+  return ![...keyData].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+  });
+}
+
 function patchSelectorHelp(selector: SelectorLike): void {
   const children = selector.children;
   if (!Array.isArray(children)) return;
@@ -960,6 +1011,44 @@ function patchSelectorHelp(selector: SelectorLike): void {
     return [editorHelpLine(selectorState(selector), width), ...native.slice(1)];
   };
   help[HELP_RENDER_PATCHED] = true;
+}
+
+function patchSelectorSearch(
+  selector: SelectorLike,
+  theme: DisplayTheme | undefined,
+): void {
+  const children = selector.children;
+  if (!Array.isArray(children)) return;
+  const search = children.find((child) => {
+    if (!child || typeof child !== "object") return false;
+    const candidate = child as Record<string | symbol, unknown>;
+    if (
+      candidate[SEARCH_RENDER_PATCHED] ||
+      typeof candidate.render !== "function"
+    ) {
+      return false;
+    }
+    return (
+      (child as { constructor?: { name?: string } }).constructor?.name ===
+      "SearchLine"
+    );
+  }) as Record<string | symbol, unknown> | undefined;
+  if (!search || typeof search.render !== "function") return;
+  const originalRender = search.render as (width: number) => string[];
+  search.render = function (this: object, width: number): string[] {
+    const state = selectorState(selector);
+    if (!getHookStatus().enabled || !state.editMode) {
+      return originalRender.call(this, width);
+    }
+    const list = selector.getTreeList?.() as TreeListLike | undefined;
+    const query = list?.getSearchQuery?.() ?? "";
+    const text = query
+      ? `Search paused in tree editor mode: ${query}`
+      : "Search paused in tree editor mode";
+    const rendered = theme?.fg ? theme.fg("muted", text) : text;
+    return [truncateToWidth(`  ${rendered}`, Math.max(1, width), "")];
+  };
+  search[SEARCH_RENDER_PATCHED] = true;
 }
 
 function editorHelpLine(

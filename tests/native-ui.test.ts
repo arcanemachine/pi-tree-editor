@@ -108,6 +108,59 @@ describe("native tree editor interaction", () => {
     expect(selectorState(selector).operations).toHaveLength(1);
   });
 
+  it("pauses native tree search while editor mode is active", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-search-pause-test",
+    );
+    manager.appendMessage({
+      role: "user",
+      content: "hello searchable entry",
+      timestamp: 1,
+    });
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: "different entry",
+      timestamp: 2,
+    });
+    setActiveMode({ sessionManager: manager } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    const list = selector.getTreeList();
+
+    selector.handleInput("hello");
+    expect(list.getSearchQuery()).toBe("hello");
+    selector.handleInput("\t");
+    expect(selector.render(100).join("\n")).toContain(
+      "Search paused in tree editor mode: hello",
+    );
+
+    selector.handleInput("x");
+    selector.handleInput("\x7f");
+    expect(list.getSearchQuery()).toBe("hello");
+
+    selector.handleInput("\t");
+    expect(selector.render(100).join("\n")).not.toContain(
+      "Search paused in tree editor mode",
+    );
+    selector.handleInput("x");
+    expect(list.getSearchQuery()).toBe("hellox");
+  });
+
   it("keeps long-message tree rendering bounded while navigating", async () => {
     const treeSelectorUrl = new URL(
       "./modes/interactive/components/tree-selector.js",
@@ -227,7 +280,7 @@ describe("native tree editor interaction", () => {
     selector.handleInput("t");
     selector.handleInput("e");
     selector.handleInput("\r");
-    selector.handleInput("s");
+    selector.handleInput("\x13");
     expect(selector.render(48).join("\n")).toContain("→ Yes");
     selector.handleInput("\u001b[B");
     expect(selector.render(48).join("\n")).toContain("→ Cancel");
@@ -236,7 +289,7 @@ describe("native tree editor interaction", () => {
     expect(selectorState(selector).operations).toHaveLength(1);
     expect(exited).toBe(false);
 
-    selector.handleInput("s");
+    selector.handleInput("\x13");
     selector.handleInput("\r");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(selectorState(selector).operations).toHaveLength(0);
@@ -499,7 +552,7 @@ describe("native tree editor interaction", () => {
       blockIndex: 0,
       text: "invalid",
     });
-    selector.handleInput("s");
+    selector.handleInput("\x13");
     expect(state.flow).toBeUndefined();
     expect(state.operations).toHaveLength(2);
     expect(state.editMode).toBe(true);
@@ -1766,7 +1819,7 @@ describe("native tree editor interaction", () => {
     selector.handleInput("m");
     selector.handleInput("\r");
     expect(render()).toBe(normalHeight);
-    selector.handleInput("s");
+    selector.handleInput("\x13");
     const reviewHeight = render();
     expect(render()).toBe(reviewHeight);
     selector.handleInput("\u001b");

@@ -78,11 +78,11 @@ pi -e /path/to/pi-tree-editor/src/index.ts
 | `Ctrl+S`  | Review and save staged changes, then reopen `/tree`   |
 | `Escape`  | Go back one level or leave the current flow           |
 
-Uppercase aliases also work for `e`, `d`, `u`, and `r`; `Shift+A` is its own action. Plain `s` remains native tree search input; `Ctrl+S` is the only save shortcut.
+Uppercase aliases also work for `e`, `d`, `u`, and `r`; `Shift+A` is its own action. In normal tree mode, plain printable input and Backspace remain native search controls. While tree-editor mode is active, the current search query is preserved but paused: only the listed editor actions and native tree controls respond, while other printable input and Backspace are ignored. `Ctrl+S` is the only save shortcut.
 
 ### Edit and remove
 
-Press `e` to edit a supported block. For assistant messages, the chooser lists reasoning blocks first and answer blocks second. Distinct blocks in the same message can be edited independently.
+Press `e` to edit a supported block. For assistant messages, the chooser lists reasoning blocks first and answer blocks second. Distinct blocks in the same message can be edited independently. Search remains frozen until you leave tree-editor mode, so you can safely type editor commands without changing the selected result.
 
 Press `d` on a compound assistant message to choose a reasoning block, an answer block, or the entire message. Tool calls and their results remain one indivisible unit.
 
