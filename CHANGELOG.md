@@ -3,6 +3,7 @@
 ## 0.1.3
 
 - Return to a refreshed `/tree` view after saving with `Ctrl+S`, while saves from the exit confirmation return to the conversation.
+- Show refreshed conversation content after leaving the post-save tree.
 
 ## 0.1.2
 

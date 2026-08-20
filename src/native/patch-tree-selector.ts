@@ -2332,6 +2332,14 @@ async function previewAndApply(
         `the old tree view could not be closed (${error instanceof Error ? error.message : String(error)})`,
       );
     }
+    try {
+      interactive?.chatContainer?.clear?.();
+      interactive?.renderInitialMessages?.();
+    } catch (error) {
+      uiWarnings.push(
+        `the conversation view could not be refreshed (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
     if (destination === "tree") {
       const showTreeSelector = interactive?.showTreeSelector;
       if (typeof showTreeSelector === "function") {
@@ -2345,25 +2353,14 @@ async function previewAndApply(
       } else {
         uiWarnings.push("/tree could not be reopened; reopen it manually");
       }
-      try {
-        interactive?.showStatus?.("Applied copy-on-write tree edits");
-        interactive?.ui?.requestRender?.();
-      } catch (error) {
-        uiWarnings.push(
-          `the refreshed tree could not be rendered (${error instanceof Error ? error.message : String(error)})`,
-        );
-      }
-    } else {
-      try {
-        interactive?.chatContainer?.clear?.();
-        interactive?.renderInitialMessages?.();
-        interactive?.showStatus?.("Applied copy-on-write tree edits");
-        interactive?.ui?.requestRender?.();
-      } catch (error) {
-        uiWarnings.push(
-          `the conversation view could not be refreshed (${error instanceof Error ? error.message : String(error)})`,
-        );
-      }
+    }
+    try {
+      interactive?.showStatus?.("Applied copy-on-write tree edits");
+      interactive?.ui?.requestRender?.();
+    } catch (error) {
+      uiWarnings.push(
+        `the refreshed ${destination === "tree" ? "tree" : "conversation"} could not be rendered (${error instanceof Error ? error.message : String(error)})`,
+      );
     }
     if (uiWarnings.length > 0) {
       ctx.ui.notify(

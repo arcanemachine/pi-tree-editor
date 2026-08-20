@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { installNativeHooks } from "../src/native/internal-imports.js";
+import { activePath } from "../src/surgery/active-path.js";
+import type { SessionEntryLike } from "../src/surgery/types.js";
 import {
   selectorState,
   setActiveMode,
@@ -289,10 +291,20 @@ describe("native tree editor interaction", () => {
       timestamp: 1,
     });
     let applyTreeReopened = 0;
+    let conversationClears = 0;
+    let conversationRenders = 0;
     setActiveMode({
       sessionManager: applyManager,
       showTreeSelector: () => {
         applyTreeReopened += 1;
+      },
+      chatContainer: {
+        clear: () => {
+          conversationClears += 1;
+        },
+      },
+      renderInitialMessages: () => {
+        conversationRenders += 1;
       },
       ui: { terminal: { rows: 40 }, requestRender: () => undefined },
     } as never);
@@ -319,6 +331,8 @@ describe("native tree editor interaction", () => {
     expect(selectorState(applySelector).operations).toHaveLength(0);
     expect(exitApplied).toBe(true);
     expect(applyTreeReopened).toBe(0);
+    expect(conversationClears).toBe(1);
+    expect(conversationRenders).toBe(1);
   });
 
   it("reopens a fresh tree after Ctrl+S saves", async () => {
@@ -331,26 +345,63 @@ describe("native tree editor interaction", () => {
     const manager = SessionManager.inMemory(
       "/tmp/pi-tree-editor-save-tree-test",
     );
+    const originalValue = "original tree value";
+    const editedValue = "updated tree value";
     const leafId = manager.appendMessage({
       role: "user",
-      content: "hello",
+      content: originalValue,
       timestamp: 1,
     });
     let reopened = 0;
     let reopenedLeaf: string | null = null;
     let reopenedEntryCount = 0;
     let exited = 0;
+    const callOrder: string[] = [];
+    const conversationMessagesAtRender: string[][] = [];
+    let conversationClears = 0;
+    let conversationRenders = 0;
+    const activePathMessages = () =>
+      activePath(
+        manager.getEntries() as unknown as SessionEntryLike[],
+        manager.getLeafId(),
+      ).flatMap((entry) => {
+        if (
+          entry.type !== "message" ||
+          !entry.message ||
+          typeof entry.message !== "object"
+        ) {
+          return [];
+        }
+        const content = (entry.message as { content?: unknown }).content;
+        return typeof content === "string" ? [content] : [];
+      });
     setActiveMode({
       sessionManager: manager,
       showTreeSelector: () => {
+        callOrder.push("fresh-tree-open");
         reopened += 1;
         reopenedLeaf = manager.getLeafId();
         reopenedEntryCount = manager.getEntries().length;
       },
-      chatContainer: { clear: () => undefined },
-      renderInitialMessages: () => undefined,
-      showStatus: () => undefined,
-      ui: { requestRender: () => undefined },
+      chatContainer: {
+        clear: () => {
+          callOrder.push("conversation-clear");
+          conversationClears += 1;
+        },
+      },
+      renderInitialMessages: () => {
+        callOrder.push("conversation-render");
+        conversationRenders += 1;
+        conversationMessagesAtRender.push(activePathMessages());
+      },
+      showStatus: () => {
+        callOrder.push("status");
+      },
+      ui: {
+        requestRender: () => {
+          callOrder.push("request-render");
+        },
+      },
     } as never);
     setExtensionContext({
       hasUI: true,
@@ -363,13 +414,15 @@ describe("native tree editor interaction", () => {
       30,
       () => undefined,
       () => {
+        callOrder.push("old-tree-close");
         exited += 1;
       },
     );
     selector.handleInput("\t");
-    selector.handleInput("a");
-    selector.handleInput("\r");
-    selector.handleInput("x");
+    selector.handleInput("e");
+    selector.handleInput("\x05");
+    for (const _ of originalValue) selector.handleInput("\x7f");
+    selector.handleInput(editedValue);
     selector.handleInput("\r");
     selector.handleInput("\u0013");
     expect(selectorState(selector).flow).toBe("save-review");
@@ -382,6 +435,18 @@ describe("native tree editor interaction", () => {
     expect(reopened).toBe(1);
     expect(reopenedLeaf).not.toBe(leafId);
     expect(reopenedEntryCount).toBe(manager.getEntries().length);
+    expect(conversationClears).toBe(1);
+    expect(conversationRenders).toBe(1);
+    expect(conversationMessagesAtRender).toEqual([[editedValue]]);
+    expect(callOrder.indexOf("old-tree-close")).toBeLessThan(
+      callOrder.indexOf("conversation-clear"),
+    );
+    expect(callOrder.indexOf("conversation-clear")).toBeLessThan(
+      callOrder.indexOf("conversation-render"),
+    );
+    expect(callOrder.indexOf("conversation-render")).toBeLessThan(
+      callOrder.indexOf("fresh-tree-open"),
+    );
     expect(
       manager
         .getEntries()
