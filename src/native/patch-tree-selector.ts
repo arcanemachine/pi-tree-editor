@@ -256,8 +256,8 @@ export function patchTreeSelector(
     if (keyData === "\r" || keyData === "\n") {
       getExtensionContext()?.ui.notify(
         state.operations.length > 0
-          ? "Use ctrl+s to save staged tree edits"
-          : "No staged tree edits",
+          ? "Use ctrl+s to save staged tree edits, or Escape for exit options"
+          : "Press Tab to exit tree editor mode",
         "info",
       );
       return;

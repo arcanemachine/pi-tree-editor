@@ -58,17 +58,19 @@ pi -e /path/to/pi-tree-editor/src/index.ts
 2. Press `Tab` to enter tree-editor mode.
 3. Select a tree item and stage your changes.
 4. Press `Ctrl+S` to review and apply them.
+5. When no changes are staged, press `Tab` again to exit tree-editor mode.
 
-| Key       | Action                                              |
-| --------- | --------------------------------------------------- |
-| `e`       | Edit the selected item or content block             |
-| `d`       | Remove the selected block, message, or logical unit |
-| `a`       | Insert after the selected item                      |
-| `Shift+A` | Insert before the selected item                     |
-| `u`       | Unstage changes for the selected item               |
-| `r`       | Show or hide reasoning previews in editor mode      |
-| `Ctrl+S`  | Review and save staged changes, then reopen `/tree` |
-| `Escape`  | Go back one level or leave the current flow         |
+| Key       | Action                                                |
+| --------- | ----------------------------------------------------- |
+| `Tab`     | Enter or exit tree-editor mode when nothing is staged |
+| `e`       | Edit the selected item or content block               |
+| `d`       | Remove the selected block, message, or logical unit   |
+| `a`       | Insert after the selected item                        |
+| `Shift+A` | Insert before the selected item                       |
+| `u`       | Unstage changes for the selected item                 |
+| `r`       | Show or hide reasoning previews in editor mode        |
+| `Ctrl+S`  | Review and save staged changes, then reopen `/tree`   |
+| `Escape`  | Go back one level or leave the current flow           |
 
 Uppercase aliases also work for `e`, `d`, `u`, and `r`; `Shift+A` is its own action. Plain `s` remains native tree search input; `Ctrl+S` is the only save shortcut.
 

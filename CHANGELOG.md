@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+- Clarify that `Tab` exits tree-editor mode when no changes are staged.
+
 ## 0.1.3
 
 - Return to a refreshed `/tree` view after saving with `Ctrl+S`, while saves from the exit confirmation return to the conversation.

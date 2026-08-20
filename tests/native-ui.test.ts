@@ -162,9 +162,10 @@ describe("native tree editor interaction", () => {
       timestamp: 1,
     });
     setActiveMode({ sessionManager: manager } as never);
+    const notifications: string[] = [];
     setExtensionContext({
       hasUI: true,
-      ui: { notify: () => undefined },
+      ui: { notify: (message: string) => notifications.push(message) },
     } as never);
     let exited = false;
     const selector = new TreeSelectorComponent(
@@ -178,6 +179,8 @@ describe("native tree editor interaction", () => {
     );
     selector.handleInput("\t");
     expect(selector.render(100).join("\n")).toContain("Tree editor ON");
+    selector.handleInput("\r");
+    expect(notifications.at(-1)).toBe("Press Tab to exit tree editor mode");
     selector.handleInput("\u001b");
     expect(selectorState(selector).flow).toBeUndefined();
     expect(selectorState(selector).editMode).toBe(false);
