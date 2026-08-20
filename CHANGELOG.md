@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
 
 - Pause native tree search while tree-editor mode is active, preserving the current query until editor mode is exited.
 - Keep native tree navigation, filtering, copying, folding, and label controls available while search is paused.

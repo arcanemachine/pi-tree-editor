@@ -1,6 +1,6 @@
 {
   "name": "@arcanemachine/pi-tree-editor",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Safely edit Pi conversation history through the native tree selector",
   "type": "module",
   "keywords": [
