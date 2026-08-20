@@ -4,6 +4,12 @@
   <img src="https://raw.githubusercontent.com/arcanemachine/pi-tree-editor/main/logo.jpg" alt="pi-tree-editor logo" width="250" />
 </p>
 
+<p align="center" style="margin-top: 1rem">
+  <a href="https://asciinema.org/a/K1rtUpxP5iEpu9Mm" target="_blank">
+    Click here to see a demo!
+  </a>
+</p>
+
 ## Intro
 
 `pi-tree-editor` is a [Pi](https://pi.dev) extension for editing conversation history from Pi's native `/tree` selector.
