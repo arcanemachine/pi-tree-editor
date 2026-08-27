@@ -15,34 +15,32 @@ type NativeModuleLoader = () => Promise<{
 
 let installing: Promise<boolean> | undefined;
 
-export function installNativeHooks(): Promise<boolean> {
-  if (!installing) installing = install();
+export function installNativeHooks(theme?: unknown): Promise<boolean> {
+  if (!installing) installing = install(theme);
   return installing;
 }
 
-async function install(): Promise<boolean> {
+async function install(theme?: unknown): Promise<boolean> {
   return installWithLoader(async () => {
-    const resolved = await import.meta
-      .resolve("@earendil-works/pi-coding-agent");
-    const selectorUrl = new URL(
-      "./modes/interactive/components/tree-selector.js",
-      resolved,
-    ).href;
-    const interactiveUrl = new URL(
-      "./modes/interactive/interactive-mode.js",
-      resolved,
-    ).href;
+    const nativeModule =
+      (await import("@earendil-works/pi-coding-agent")) as NativeModule;
     let themeModule: NativeModule | undefined;
-    try {
-      const themeUrl = new URL("./modes/interactive/theme/theme.js", resolved)
-        .href;
-      themeModule = (await import(themeUrl)) as NativeModule;
-    } catch {
-      themeModule = undefined;
+    if (theme !== undefined) {
+      themeModule = { theme };
+    } else {
+      try {
+        const resolved = await import.meta
+          .resolve("@earendil-works/pi-coding-agent");
+        const themeUrl = new URL("./modes/interactive/theme/theme.js", resolved)
+          .href;
+        themeModule = (await import(themeUrl)) as NativeModule;
+      } catch {
+        themeModule = undefined;
+      }
     }
     return {
-      selectorModule: (await import(selectorUrl)) as NativeModule,
-      interactiveModule: (await import(interactiveUrl)) as NativeModule,
+      selectorModule: nativeModule,
+      interactiveModule: nativeModule,
       themeModule,
     };
   });

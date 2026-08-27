@@ -10,11 +10,11 @@ import {
 } from "./native/patch-state.js";
 
 export default function piTreeEditor(pi: ExtensionAPI): void {
-  void installNativeHooks();
-
   pi.on("session_start", (_event, ctx) => {
     setExtensionContext(ctx);
-    void installNativeHooks().then(() => notifyHookFailureIfNeeded());
+    void installNativeHooks(ctx.ui.theme).then(() =>
+      notifyHookFailureIfNeeded(),
+    );
   });
   pi.on("session_shutdown", () => {
     clearSessionState();

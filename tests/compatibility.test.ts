@@ -89,6 +89,36 @@ describe("native compatibility", () => {
     const status = getHookStatus();
     expect(status.enabled).toBe(installed);
     if (!installed) expect(status.reason).toBeTruthy();
+
+    const native = await import("@earendil-works/pi-coding-agent");
+    expect(
+      (native.TreeSelectorComponent.prototype as any)[
+        Symbol.for("arcanemachine.pi-tree-editor.selector-patched")
+      ],
+    ).toBe(installed);
+    expect(
+      (native.InteractiveMode.prototype as any)
+        .__piTreeEditorInteractivePatched,
+    ).toBe(installed);
+  });
+
+  it("supports a shared public runtime module for both native hooks", async () => {
+    const modules = fakeModules();
+    const nativeModule = {
+      ...modules.selectorModule,
+      ...modules.interactiveModule,
+    };
+    const installed = await installNativeHooksForTest(async () => ({
+      selectorModule: nativeModule,
+      interactiveModule: nativeModule,
+      themeModule: { theme: { fg: (_color: string, text: string) => text } },
+    }));
+
+    expect(installed).toBe(true);
+    new (nativeModule.TreeSelectorComponent as any)().handleInput("native");
+    new (nativeModule.InteractiveMode as any)().showTreeSelector();
+    expect(modules.selectorCalls).toEqual(["native"]);
+    expect(modules.interactiveCalls).toHaveLength(1);
   });
 
   it("delegates normal-mode reasoning keys to native selector input", async () => {
