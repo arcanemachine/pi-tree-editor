@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6
+
+- Fix native tree hooks with Pi 0.84.3's bundled Node runtime by using the public runtime module and active UI theme.
+
 ## 0.1.5
 
 - Pause native tree search while tree-editor mode is active, preserving the current query until editor mode is exited.

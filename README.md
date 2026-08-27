@@ -151,7 +151,7 @@ If applying a change fails, the extension returns to the original branch when po
 
 ## Compatibility and fallback
 
-Tested with Pi 0.84.1. Compatibility is based on the native capabilities the extension uses rather than a strict Pi version allowlist.
+Tested with Pi 0.84.1 and 0.84.3. Compatibility is based on the native capabilities the extension uses rather than a strict Pi version allowlist.
 
 If those capabilities are unavailable or a runtime hook fails, the extension warns once and leaves native `/tree` available without partial augmentation.
 
