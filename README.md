@@ -84,7 +84,7 @@ Uppercase aliases also work for `e`, `d`, `u`, and `r`; `Shift+A` is its own act
 
 Press `e` to edit a supported block. For assistant messages, the chooser lists reasoning blocks first and answer blocks second. Distinct blocks in the same message can be edited independently. Search remains frozen until you leave tree-editor mode, so you can safely type editor commands without changing the selected result.
 
-Press `d` on a compound assistant message to choose a reasoning block, an answer block, or the entire message. Tool calls and their results remain one indivisible unit.
+Press `d` on a compound assistant message to choose a reasoning block, an answer block, or the entire message. Tool calls, their results, and permitted extension or metadata entries recorded between them remain one indivisible unit.
 
 Reasoning previews are hidden by default in both normal and editor modes. Press `r` in editor mode to show or hide them for the current visit. Staged reasoning markers remain visible when previews are hidden.
 

@@ -55,6 +55,97 @@ describe("logical units", () => {
     expect(result.units[1]?.entryIds).toEqual(["a", "r"]);
   });
 
+  it("groups tool results across permitted interleaved entries", () => {
+    const path = [
+      user("u", null, "run"),
+      entry("a", "u", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+          { type: "toolCall", id: "call-2", name: "bash", arguments: {} },
+        ],
+        stopReason: "toolUse",
+      }),
+      {
+        type: "custom_message",
+        id: "m",
+        parentId: "a",
+        customType: "inter-agent-message",
+        content: "status",
+        display: true,
+      },
+      {
+        type: "model_change",
+        id: "model",
+        parentId: "m",
+        provider: "openai",
+        modelId: "test",
+      },
+      entry("r1", "model", {
+        role: "toolResult",
+        toolCallId: "call-1",
+        content: "ok",
+      }),
+      {
+        type: "custom",
+        id: "marker",
+        parentId: "r1",
+        customType: "marker",
+        data: { state: "done" },
+      },
+      entry("r2", "marker", {
+        role: "toolResult",
+        toolCallId: "call-2",
+        content: "ok",
+      }),
+      assistant("a2", "r2", "done"),
+    ];
+    const result = buildLogicalUnits(path);
+    expect(result.issues).toEqual([]);
+    expect(result.units[1]?.kind).toBe("tool-exchange");
+    expect(result.units[1]?.entryIds).toEqual([
+      "a",
+      "m",
+      "model",
+      "r1",
+      "marker",
+      "r2",
+    ]);
+  });
+
+  it("does not cross another conversational message while finding results", () => {
+    const path = [
+      user("u", null, "run"),
+      entry("a", "u", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+        ],
+        stopReason: "toolUse",
+      }),
+      {
+        type: "custom_message",
+        id: "m",
+        parentId: "a",
+        customType: "inter-agent-message",
+        content: "status",
+        display: true,
+      },
+      user("u2", "m", "new turn"),
+      entry("r", "u2", {
+        role: "toolResult",
+        toolCallId: "call-1",
+        content: "late",
+      }),
+    ];
+    const result = buildLogicalUnits(path);
+    expect(result.units[1]?.entryIds).toEqual(["a", "m"]);
+    expect(result.issues).toEqual([
+      "Assistant entry a has 1 tool call(s) but 0 adjacent result(s)",
+      "Tool result entry r has no adjacent assistant tool call",
+    ]);
+  });
+
   it("finds text blocks without treating images as editable", () => {
     const target = entry("u", null, {
       role: "user",
@@ -141,6 +232,80 @@ describe("planSurgery", () => {
       operations: [{ kind: "remove-unit", unitId: "a" }],
     });
     expect(plan.removedEntryIds).toEqual(["a", "r"]);
+  });
+
+  it("removes the complete compound unit with interleaved entries", () => {
+    const entries: SessionEntryLike[] = [
+      user("u", null, "run"),
+      entry("a", "u", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+        ],
+        stopReason: "toolUse",
+      }),
+      {
+        type: "custom_message",
+        id: "m",
+        parentId: "a",
+        customType: "inter-agent-message",
+        content: "status",
+        display: true,
+      },
+      entry("r", "m", {
+        role: "toolResult",
+        toolCallId: "call-1",
+        content: "ok",
+      }),
+      assistant("a2", "r", "done"),
+    ];
+    const plan = planSurgery({
+      entries,
+      leafId: "a2",
+      operations: [{ kind: "remove-unit", unitId: "a" }],
+    });
+    expect(plan.removedEntryIds).toEqual(["a", "m", "r"]);
+  });
+
+  it("bounds malformed exchange diagnostics while retaining all details", () => {
+    const entries: SessionEntryLike[] = [user("u", null, "run")];
+    let parentId = "u";
+    for (let index = 1; index <= 4; index += 1) {
+      const id = `a${index}`;
+      entries.push(
+        entry(id, parentId, {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: `call-${index}`,
+              name: "bash",
+              arguments: {},
+            },
+          ],
+          stopReason: "toolUse",
+        }),
+      );
+      parentId = id;
+    }
+    try {
+      planSurgery({
+        entries,
+        leafId: parentId,
+        operations: [{ kind: "edit-text", entryId: "u", text: "changed" }],
+      });
+      throw new Error("expected malformed exchange error");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: "MALFORMED_TOOL_EXCHANGE",
+        details: { issueCount: 4, issues: expect.any(Array) },
+      });
+      expect(error).toHaveProperty(
+        "message",
+        expect.stringContaining("1 more issue"),
+      );
+      expect((error as Error).message.length).toBeLessThan(400);
+    }
   });
 
   it("rejects unresolved compaction boundaries", () => {

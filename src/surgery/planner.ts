@@ -47,8 +47,8 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
   if (issues.length > 0) {
     throw new SurgeryError(
       "MALFORMED_TOOL_EXCHANGE",
-      issues.join("; "),
-      issues,
+      summarizeToolExchangeIssues(issues),
+      { issueCount: issues.length, issues },
     );
   }
   const unitById = new Map<string, LogicalUnit>();
@@ -566,6 +566,13 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     warnings,
     earliestAffectedIndex,
   };
+}
+
+function summarizeToolExchangeIssues(issues: string[]): string {
+  const examples = issues.slice(0, 3).join("; ");
+  const remaining = issues.length - Math.min(issues.length, 3);
+  const count = `${issues.length} malformed tool exchange issue${issues.length === 1 ? "" : "s"}`;
+  return `${count}; ${examples}${remaining > 0 ? `; ${remaining} more issue${remaining === 1 ? "" : "s"}` : ""}`;
 }
 
 function claimBlockTarget(

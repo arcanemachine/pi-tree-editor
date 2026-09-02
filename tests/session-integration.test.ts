@@ -55,6 +55,101 @@ describe("current Pi SessionManager integration", () => {
     ).toBe(true);
   });
 
+  it("preserves interleaved custom messages while reconstructing a tool exchange", async () => {
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-interleaved-test",
+    );
+    const userId = manager.appendMessage({
+      role: "user",
+      content: "run",
+      timestamp: 1,
+    });
+    const callId = manager.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+      ],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: 2,
+    });
+    const noteId = manager.appendCustomMessageEntry(
+      "inter-agent-message",
+      "status",
+      true,
+    );
+    const resultId = manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "bash",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: 3,
+    });
+    const leafId = manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "openai",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 4,
+    });
+    const before = structuredClone(managerEntries(manager));
+    const plan = planSurgery({
+      entries: before,
+      leafId,
+      operations: [{ kind: "edit-text", entryId: userId, text: "changed" }],
+    });
+    await applySurgery(manager as never, plan);
+
+    const active = manager.getBranch();
+    const activeNote = active.find(
+      (entry) => entry.type === "custom_message" && entry.content === "status",
+    );
+    const activeCall = active.find(
+      (entry) =>
+        entry.type === "message" &&
+        (entry.message as { role?: string }).role === "assistant" &&
+        Array.isArray((entry.message as { content?: unknown }).content) &&
+        (entry.message as { content: Array<{ type?: string }> }).content[0]
+          ?.type === "toolCall",
+    );
+    const activeResult = active.find(
+      (entry) =>
+        entry.type === "message" &&
+        (entry.message as { role?: string }).role === "toolResult",
+    );
+    expect(active.find((entry) => entry.id === noteId)).toBeUndefined();
+    expect(active.find((entry) => entry.id === callId)).toBeUndefined();
+    expect(active.find((entry) => entry.id === resultId)).toBeUndefined();
+    expect(activeNote?.parentId).toBe(activeCall?.id);
+    expect(activeResult?.parentId).toBe(activeNote?.id);
+    expect(
+      manager
+        .buildSessionContext()
+        .messages.some((message) => JSON.stringify(message).includes("status")),
+    ).toBe(true);
+  });
+
   it("inserts a visible context note into the effective context", async () => {
     const manager = SessionManager.inMemory("/tmp/pi-tree-editor-note-test");
     const userId = manager.appendMessage({

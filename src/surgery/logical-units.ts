@@ -33,6 +33,22 @@ export function toolResultId(entry: SessionEntryLike): string | undefined {
   return typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
 }
 
+function isInterleavedToolEntry(entry: SessionEntryLike): boolean {
+  switch (entry.type) {
+    case "custom_message":
+    case "custom":
+    case "label":
+    case "session_info":
+    case "model_change":
+    case "thinking_level_change":
+      return true;
+    case "message":
+      return message(entry)?.role === "custom";
+    default:
+      return false;
+  }
+}
+
 export function buildLogicalUnits(path: SessionEntryLike[]): {
   units: LogicalUnit[];
   issues: string[];
@@ -58,12 +74,19 @@ export function buildLogicalUnits(path: SessionEntryLike[]): {
       while (cursor < path.length && resultIds.length < calls.length) {
         const candidate = path[cursor];
         const resultId = toolResultId(candidate);
-        if (!resultId) break;
+        if (!resultId) {
+          if (!isInterleavedToolEntry(candidate)) break;
+          grouped.push(candidate);
+          cursor += 1;
+          continue;
+        }
         if (!callSet.has(resultId)) {
           issues.push(
             `Tool result ${candidate.id} does not belong to assistant entry ${entry.id}`,
           );
-        } else if (claimedToolResults.has(candidate.id)) {
+          break;
+        }
+        if (claimedToolResults.has(candidate.id)) {
           issues.push(`Tool result entry ${candidate.id} is repeated`);
         } else if (resultIds.includes(resultId)) {
           issues.push(
