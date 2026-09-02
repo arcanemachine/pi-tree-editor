@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7
+
+- Handle permitted Pi extension and metadata entries interleaved between assistant tool calls and their results, and bound malformed-history diagnostics.
+
 ## 0.1.6
 
 - Fix native tree hooks with Pi 0.84.3's bundled Node runtime by using the public runtime module and active UI theme.
