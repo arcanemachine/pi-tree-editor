@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8
+
+- Allow whole-unit removal to repair aborted assistant tool calls with missing results while continuing to reject malformed exchanges left in the reconstructed candidate.
+
 ## 0.1.7
 
 - Handle permitted Pi extension and metadata entries interleaved between assistant tool calls and their results, and bound malformed-history diagnostics.

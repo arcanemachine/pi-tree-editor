@@ -234,6 +234,103 @@ describe("planSurgery", () => {
     expect(plan.removedEntryIds).toEqual(["a", "r"]);
   });
 
+  it("removes a malformed assistant tool unit as a whole", () => {
+    const entries = [
+      user("u", null, "run"),
+      entry("a", "u", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+        ],
+        stopReason: "aborted",
+        errorMessage: "Operation aborted",
+      }),
+      assistant("a2", "a", "done"),
+    ];
+    const plan = planSurgery({
+      entries,
+      leafId: "a2",
+      operations: [{ kind: "remove-unit", unitId: "a" }],
+    });
+    expect(plan.removedEntryIds).toEqual(["a"]);
+    expect(plan.replay).toEqual([
+      expect.objectContaining({ kind: "entry", sourceId: "a2" }),
+    ]);
+  });
+
+  it("rejects a candidate that retains a malformed tool exchange", () => {
+    const entries = [
+      user("u", null, "run"),
+      entry("a", "u", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+        ],
+        stopReason: "aborted",
+      }),
+    ];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "a",
+        operations: [{ kind: "edit-text", entryId: "u", text: "changed" }],
+      }),
+    ).toThrow("malformed tool exchange issue");
+  });
+
+  it("rejects when another malformed unit remains", () => {
+    const entries = [
+      user("u", null, "run"),
+      entry("a1", "u", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+        ],
+        stopReason: "aborted",
+      }),
+      entry("a2", "a1", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-2", name: "bash", arguments: {} },
+        ],
+        stopReason: "aborted",
+      }),
+    ];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "a2",
+        operations: [{ kind: "remove-unit", unitId: "a1" }],
+      }),
+    ).toThrow("malformed tool exchange issue");
+  });
+
+  it("rejects an orphan result left after removing its assistant call", () => {
+    const entries = [
+      user("u", null, "run"),
+      entry("a", "u", {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "bash", arguments: {} },
+        ],
+        stopReason: "aborted",
+      }),
+      user("u2", "a", "next"),
+      entry("r", "u2", {
+        role: "toolResult",
+        toolCallId: "call-1",
+        content: "late",
+      }),
+    ];
+    expect(() =>
+      planSurgery({
+        entries,
+        leafId: "r",
+        operations: [{ kind: "remove-unit", unitId: "a" }],
+      }),
+    ).toThrow("malformed tool exchange issue");
+  });
+
   it("removes the complete compound unit with interleaved entries", () => {
     const entries: SessionEntryLike[] = [
       user("u", null, "run"),

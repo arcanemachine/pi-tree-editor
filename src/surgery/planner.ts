@@ -43,14 +43,7 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
     );
   }
 
-  const { units, issues } = buildLogicalUnits(sourcePath);
-  if (issues.length > 0) {
-    throw new SurgeryError(
-      "MALFORMED_TOOL_EXCHANGE",
-      summarizeToolExchangeIssues(issues),
-      { issueCount: issues.length, issues },
-    );
-  }
+  const { units } = buildLogicalUnits(sourcePath);
   const unitById = new Map<string, LogicalUnit>();
   const entryToUnit = new Map<string, LogicalUnit>();
   for (const unit of units) {
@@ -491,6 +484,14 @@ export function planSurgery(input: PlanInput): SurgeryPlan {
 
   const candidate = buildCandidate(prefix, replay);
   validateCandidate(candidate);
+  const { issues: candidateIssues } = buildLogicalUnits(candidate);
+  if (candidateIssues.length > 0) {
+    throw new SurgeryError(
+      "MALFORMED_TOOL_EXCHANGE",
+      summarizeToolExchangeIssues(candidateIssues),
+      { issueCount: candidateIssues.length, issues: candidateIssues },
+    );
+  }
   validateCandidateContext(candidate);
 
   const removedEntryIds = units
