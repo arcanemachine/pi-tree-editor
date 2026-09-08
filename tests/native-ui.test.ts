@@ -5,6 +5,7 @@ import { installNativeHooks } from "../src/native/internal-imports.js";
 import { activePath } from "../src/surgery/active-path.js";
 import type { SessionEntryLike } from "../src/surgery/types.js";
 import {
+  getHookStatus,
   selectorState,
   setActiveMode,
   setExtensionContext,
@@ -1827,5 +1828,43 @@ describe("native tree editor interaction", () => {
     selector.handleInput("\u001b");
     const exitHeight = render();
     expect(render()).toBe(exitHeight);
+  });
+
+  it("fails closed when the active parent chain is malformed", async () => {
+    await installNativeHooks();
+    const treeSelectorUrl = new URL(
+      "./modes/interactive/components/tree-selector.js",
+      await import.meta.resolve("@earendil-works/pi-coding-agent"),
+    ).href;
+    const { TreeSelectorComponent } = await import(treeSelectorUrl);
+    const manager = SessionManager.inMemory(
+      "/tmp/pi-tree-editor-malformed-parent-regression",
+    );
+    manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    const leafId = manager.appendMessage({
+      role: "user",
+      content: "child",
+      timestamp: 2,
+    });
+    setActiveMode({ sessionManager: manager } as never);
+    setExtensionContext({
+      hasUI: true,
+      ui: { notify: () => undefined },
+    } as never);
+    const selector = new TreeSelectorComponent(
+      manager.getTree(),
+      leafId,
+      30,
+      () => undefined,
+      () => undefined,
+    );
+    const child = manager.getEntries().find((entry) => entry.id === leafId);
+    expect(child).toBeDefined();
+    (child as { parentId: string | null }).parentId = "missing-parent";
+
+    expect(() => selector.render(80)).not.toThrow();
+    expect(selector.render(80).join("\n")).toContain("child");
+    expect(getHookStatus().enabled).toBe(false);
+    expect(() => selector.handleInput("\u001b[B")).not.toThrow();
   });
 });

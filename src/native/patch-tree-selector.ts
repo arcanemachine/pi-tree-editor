@@ -18,7 +18,11 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import * as PiTui from "@earendil-works/pi-tui";
-import { isObject, type SessionEntryLike } from "../surgery/types.js";
+import {
+  isObject,
+  SurgeryError,
+  type SessionEntryLike,
+} from "../surgery/types.js";
 import type { SessionManagerAdapter } from "../surgery/replay.js";
 import {
   getActiveMode,
@@ -154,6 +158,10 @@ export function patchTreeSelector(
     const list = this.getTreeList?.() as TreeListLike | undefined;
     if (list)
       refreshVirtualRows(list, selectorState(this), getDisplayTheme(theme));
+    if (!getHookStatus().enabled) {
+      originalHandleInput.call(this, keyData);
+      return;
+    }
     const selected = list?.getSelectedNode?.();
     if (!state.editMode) {
       if (
@@ -301,6 +309,7 @@ function patchSelectorRender(
     const state = selectorState(this);
     const list = this.getTreeList?.() as TreeListLike | undefined;
     if (list) refreshVirtualRows(list, state, theme);
+    if (!getHookStatus().enabled) return originalRender.call(this, width);
     patchTreeListDisplay(this, state, theme);
     return originalRender.call(this, width);
   };
@@ -465,6 +474,7 @@ function refreshVirtualRows(
   state: ReturnType<typeof selectorState>,
   theme?: DisplayTheme,
 ): void {
+  if (!getHookStatus().enabled) return;
   if (!list[TREE_LIST_VIRTUAL_ROWS_PATCHED]) {
     patchVirtualRows(list, state, theme);
     return;
@@ -486,10 +496,13 @@ function refreshVirtualRows(
   const base = info.baseFlatNodes;
   const before = new Map<number, unknown[]>();
   const after = new Map<number, unknown[]>();
-  const manager = getManager();
-  const path = manager
-    ? activePath(manager.getEntries(), manager.getLeafId())
-    : [];
+  const path = renderingActivePath();
+  if (!path) {
+    list.flatNodes = base;
+    info.fingerprint = fingerprint;
+    info.applyFilter();
+    return;
+  }
   const units = buildLogicalUnits(path).units;
   const unitById = new Map(units.map((unit) => [unit.id, unit]));
   for (const operation of inserts) {
@@ -1067,6 +1080,21 @@ function editorHelpLine(
             ? "Tree editor ON: ctrl+s save · e edit · d remove · a/Shift+A insert · u unstage · r reasoning"
             : "Tree editor: Tab edit mode · Escape exit /tree";
   return truncateToWidth(`  ${line}`, Math.max(1, width));
+}
+
+function renderingActivePath(): SessionEntryLike[] | undefined {
+  const manager = getManager();
+  if (!manager) return [];
+  try {
+    return activePath(manager.getEntries(), manager.getLeafId());
+  } catch (error) {
+    const reason =
+      error instanceof SurgeryError && error.code === "MISSING_PARENT"
+        ? "The active tree path references a missing parent"
+        : "The active tree path is malformed";
+    reportHookFailure(reason);
+    return undefined;
+  }
 }
 
 function getManager(): Record<string, any> | undefined {

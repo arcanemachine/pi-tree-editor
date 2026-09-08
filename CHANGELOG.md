@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.9
+
+- Fail closed to native `/tree` rendering when the active session path references a missing parent.
+
 ## 0.1.8
 
 - Allow whole-unit removal to repair aborted assistant tool calls with missing results while continuing to reject malformed exchanges left in the reconstructed candidate.
